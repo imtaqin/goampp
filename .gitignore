@@ -1,0 +1,48 @@
+# Build outputs
+goampp.exe
+goampp-debug.exe
+goampp.exe~
+*~
+*.syso
+
+# Claude Code local settings (personal preferences, machine-specific)
+.claude/
+
+# Stray screenshots / temp images
+z*.png
+
+# Bundled service binaries (downloaded by goampp at runtime)
+bin/apache/
+bin/nginx/
+bin/php/
+bin/mysql/
+bin/pgsql/
+bin/redis/
+bin/node/
+bin/python/
+bin/go/
+bin/java/
+!bin/.gitkeep
+
+# Cached downloads (re-fetched on demand)
+downloads/
+
+# Generated data
+logs/
+tmp/
+conf/apache/vhosts.conf
+conf/nginx/sites/
+
+# User content (project scaffolds land here — keep dir, ignore content)
+www/*
+!www/.gitkeep
+
+# Local config — has machine-specific paths, regenerated on first run
+config.json
+
+# IDE / OS noise
+.vscode/
+.idea/
+*.swp
+.DS_Store
+Thumbs.db
