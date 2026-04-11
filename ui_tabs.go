@@ -61,6 +61,25 @@ type page struct {
 	container *ui.Control // the Win32 child window acting as the page
 }
 
+// domainExtensions is the dev-friendly TLD list shown in the
+// "Domain extension" dropdown on the Projects and Virtual Hosts
+// forms. .test is first because it's the only one reserved by
+// RFC 6761 specifically for testing — it can never resolve to a
+// real public site, so there's no risk of accidentally hijacking
+// production traffic via your hosts file.
+//
+// .dev is intentionally NOT included: Google bought it as a real
+// gTLD with HSTS preload, so any browser that hits an http:// URL
+// on .dev will refuse to load it.
+var domainExtensions = []string{
+	".test",
+	".local",
+	".localhost",
+	".lan",
+	".home",
+	".site",
+}
+
 // essentialServices is the "Start Stack" button's target set — the core
 // web stack a developer needs to serve PHP pages with a database:
 //
@@ -93,17 +112,24 @@ var (
 	edContent   *ui.Edit
 	edKnownPaths []string // indexed parallel to the dropdown items
 
-	// Vhosts page widgets (populated in buildVhostsPage).
-	vhostList    *ui.ListView
-	vhostDomain  *ui.Edit
-	vhostDocRoot *ui.Edit
-	vhostPort    *ui.Edit
-	vhostServer  *ui.ComboBox
+	// Vhosts page widgets (populated in buildVhostsPage). The
+	// domain field is split into a name input + extension dropdown
+	// so users pick the TLD from a known-good list rather than
+	// typing it free-form (and accidentally creating a .dev vhost
+	// that hits HSTS preload).
+	vhostList      *ui.ListView
+	vhostDomainNm  *ui.Edit
+	vhostDomainExt *ui.ComboBox
+	vhostDocRoot   *ui.Edit
+	vhostPort      *ui.Edit
+	vhostServer    *ui.ComboBox
 
-	// Projects page widgets (populated in buildProjectsPage).
+	// Projects page widgets (populated in buildProjectsPage). Same
+	// split-domain treatment as the Vhosts form.
 	projFramework *ui.ComboBox
 	projName      *ui.Edit
-	projDomain    *ui.Edit
+	projDomainNm  *ui.Edit
+	projDomainExt *ui.ComboBox
 	projList      *ui.ListView
 )
 
@@ -276,10 +302,25 @@ func newPageContainer(wnd *ui.Main) *ui.Control {
 
 // showPage makes `key` visible and hides every other page. Called from
 // sidebar button handlers and from the initial WmCreate fixup.
+//
+// Why the InvalidateRect dance: hiding/showing sibling Control
+// containers via SW_HIDE/SW_SHOW does NOT automatically erase the
+// pixels where the previous page's children were drawn. With
+// WS_CLIPCHILDREN on the parent, only the new page's child rects
+// get repainted — anything that lived on the old page but doesn't
+// have a corresponding child on the new page leaves stale pixels
+// behind. Forcing the new page to invalidate its full client area
+// (with erase=true) makes Windows send WM_ERASEBKGND first, which
+// fills the area with the class brush (gray), wiping the leftover.
 func showPage(key string) {
 	for _, p := range pages {
 		if p.key == key {
-			p.container.Hwnd().ShowWindow(co.SW_SHOW)
+			h := p.container.Hwnd()
+			h.ShowWindow(co.SW_SHOW)
+			// Erase any stale pixels from a previously-active page
+			// before the new page's children paint themselves.
+			_ = h.InvalidateRect(nil, true)
+			h.UpdateWindow()
 		} else {
 			p.container.Hwnd().ShowWindow(co.SW_HIDE)
 		}
@@ -774,15 +815,44 @@ func buildVhostsPage(parent *ui.Control) {
 		Column("Port", ui.DpiX(60)).
 		Column("Server", ui.DpiX(90)))
 	vhostList.On().LvnItemChanged(func(p *win.NMLISTVIEW) {
+		// Guard everything in a recover so a panic in the click
+		// handler can't propagate up into LVM_SETITEMTEXT and make
+		// the next AddItem look like it failed.
+		defer func() {
+			if r := recover(); r != nil {
+				app.appendLog(fmt.Sprintf("vhost row select: %v", r))
+			}
+		}()
 		if p.UChanged&co.LVIF_STATE == 0 {
+			return
+		}
+		// Only react when the row was *selected* — without the
+		// state mask check we get fired during AddItem too, which
+		// then tries to populate the form from a half-built vhost
+		// and ends up reading garbage indices.
+		if p.UNewState&0x0002 == 0 { // LVIS_SELECTED
 			return
 		}
 		idx := int(p.IItem)
 		if idx < 0 || idx >= len(app.cfg.Vhosts) {
 			return
 		}
+		// All form widgets must be created before we can poke them.
+		// During the very first AddItem (called from WmCreate),
+		// vhostDomainNm/Ext might still be nil because they're
+		// constructed AFTER vhostList in build order — bail out
+		// silently and let the user re-select once everything is up.
+		if vhostDomainNm == nil || vhostDomainExt == nil ||
+			vhostDocRoot == nil || vhostPort == nil || vhostServer == nil {
+			return
+		}
 		v := app.cfg.Vhosts[idx]
-		vhostDomain.SetText(v.Domain)
+		// Split the saved domain into name + ext for the form. The
+		// split is on the LAST dot so multi-dot names like
+		// "api.myapp.test" still work — name="api.myapp", ext=".test".
+		name, ext := splitDomain(v.Domain)
+		vhostDomainNm.SetText(name)
+		setDomainExtSelection(vhostDomainExt, ext)
 		vhostDocRoot.SetText(v.DocRoot)
 		port := v.Port
 		if port == 0 {
@@ -801,28 +871,36 @@ func buildVhostsPage(parent *ui.Control) {
 	// (refreshVhostList() is called from main.go's WmCreate handler once
 	// the ListView's HWND actually exists.)
 
-	// Inline form
+	// Inline form. Domain is split into a name input + an extension
+	// dropdown so users pick from the curated TLD list rather than
+	// typing free-form (and accidentally hitting HSTS-preloaded TLDs
+	// like .dev).
 	formY := 200
 	ui.NewStatic(parent, ui.OptsStatic().
 		Text("Domain").
 		Position(ui.Dpi(10, formY+4)))
-	vhostDomain = ui.NewEdit(parent, ui.OptsEdit().
+	vhostDomainNm = ui.NewEdit(parent, ui.OptsEdit().
 		Position(ui.Dpi(72, formY)).
-		Width(ui.DpiX(180)))
+		Width(ui.DpiX(140)))
+	vhostDomainExt = ui.NewComboBox(parent, ui.OptsComboBox().
+		Position(ui.Dpi(216, formY)).
+		Width(ui.DpiX(80)).
+		Texts(domainExtensions...).
+		Select(0))
 
 	ui.NewStatic(parent, ui.OptsStatic().
 		Text("Port").
-		Position(ui.Dpi(270, formY+4)))
+		Position(ui.Dpi(310, formY+4)))
 	vhostPort = ui.NewEdit(parent, ui.OptsEdit().
 		Text("80").
-		Position(ui.Dpi(305, formY)).
+		Position(ui.Dpi(345, formY)).
 		Width(ui.DpiX(60)))
 
 	ui.NewStatic(parent, ui.OptsStatic().
 		Text("Server").
-		Position(ui.Dpi(380, formY+4)))
+		Position(ui.Dpi(420, formY+4)))
 	vhostServer = ui.NewComboBox(parent, ui.OptsComboBox().
-		Position(ui.Dpi(430, formY)).
+		Position(ui.Dpi(470, formY)).
 		Width(ui.DpiX(100)).
 		Texts("apache", "nginx", "both").
 		Select(0))
@@ -941,6 +1019,15 @@ func buildSettingsPage(parent *ui.Control) {
 	}
 	row("Auto-start on boot:", autoStartState)
 
+	// Show elevation status — needed for hosts file writes when
+	// applying virtual hosts. The "Restart as Admin" button below
+	// is only rendered when this is "no".
+	elev := "no — vhost Apply will fail with 'Access is denied'"
+	if IsElevated() {
+		elev = "yes (administrator)"
+	}
+	row("Running elevated:", elev)
+
 	y += 12
 	x := 10
 	addBtn := func(label string, w int, scheme ColorScheme, onClick func()) {
@@ -972,6 +1059,21 @@ func buildSettingsPage(parent *ui.Control) {
 	addBtn("Toggle Auto-start", 150, SchemePrimary, func() {
 		toggleAutoStart()
 	})
+	if !IsElevated() {
+		// Show the elevation button only when we're not already
+		// admin. Once elevated, the button would just no-op.
+		addBtn("Restart as Admin", 150, SchemeWarning, func() {
+			if err := RelaunchElevated(); err != nil {
+				app.appendLog("elevate: " + err.Error())
+				return
+			}
+			// Hand off cleanly: stop everything we manage so
+			// the elevated instance can take over the ports.
+			app.appendLog("relaunching as administrator — this instance will exit")
+			time.Sleep(200 * time.Millisecond)
+			quitApp(app.wnd)
+		})
+	}
 	addBtn("Add tools to PATH", 160, SchemeSuccess, func() {
 		// Runs synchronously — registry writes are fast and the
 		// broadcast is bounded to 1 second per window.
@@ -1014,33 +1116,51 @@ func buildProjectsPage(parent *ui.Control) {
 	ui.NewStatic(parent, ui.OptsStatic().
 		Text("Framework:").
 		Position(ui.Dpi(10, 34)))
+
+	// Build the framework name list at construction time and pass it
+	// via .Texts(...) — windigo only actually creates the underlying
+	// HWND on WM_CREATE, so AddItem() calls in build code are silent
+	// no-ops (they SendMessage to a null hwnd). Texts() bakes the
+	// list into the create-time options so the items appear.
+	frameworkNames := make([]string, len(Frameworks))
+	for i, f := range Frameworks {
+		frameworkNames[i] = f.Name
+	}
 	projFramework = ui.NewComboBox(parent, ui.OptsComboBox().
 		Position(ui.Dpi(90, 30)).
-		Width(ui.DpiX(200)))
-	for _, f := range Frameworks {
-		projFramework.AddItem(f.Name)
-	}
-	projFramework.SelectIndex(0)
+		Width(ui.DpiX(200)).
+		Texts(frameworkNames...).
+		Select(0))
 
-	// Project name + auto-suggested domain.
+	// Project name. Slug-friendly — we strip non-alphanumerics in
+	// onCreateProject so the user can type anything here.
 	ui.NewStatic(parent, ui.OptsStatic().
 		Text("Name:").
-		Position(ui.Dpi(310, 34)))
+		Position(ui.Dpi(305, 34)))
 	projName = ui.NewEdit(parent, ui.OptsEdit().
-		Position(ui.Dpi(350, 30)).
-		Width(ui.DpiX(150)))
+		Position(ui.Dpi(345, 30)).
+		Width(ui.DpiX(110)))
+
+	// Domain: split into a free-form name input + a dropdown of
+	// dev-friendly TLDs (.test by default). The full domain we
+	// register is `name + ext`, e.g. "myapp" + ".test" = "myapp.test".
 	ui.NewStatic(parent, ui.OptsStatic().
 		Text("Domain:").
-		Position(ui.Dpi(520, 34)))
-	projDomain = ui.NewEdit(parent, ui.OptsEdit().
-		Position(ui.Dpi(570, 30)).
-		Width(ui.DpiX(150)))
+		Position(ui.Dpi(465, 34)))
+	projDomainNm = ui.NewEdit(parent, ui.OptsEdit().
+		Position(ui.Dpi(515, 30)).
+		Width(ui.DpiX(100)))
+	projDomainExt = ui.NewComboBox(parent, ui.OptsComboBox().
+		Position(ui.Dpi(617, 30)).
+		Width(ui.DpiX(80)).
+		Texts(domainExtensions...).
+		Select(0))
 
 	// Create button — the whole point of this page.
 	newColoredButton(parent, ui.OptsButton().
 		Text("Create Project").
-		Position(ui.Dpi(735, 28)).
-		Width(ui.DpiX(80)).Height(ui.DpiY(26)),
+		Position(ui.Dpi(705, 28)).
+		Width(ui.DpiX(95)).Height(ui.DpiY(26)),
 		SchemeSuccess).
 		On().BnClicked(func() {
 		onCreateProject()
@@ -1145,13 +1265,22 @@ func onCreateProject() {
 	}
 	// Slugify: keep alphanumerics, replace anything else with "-".
 	name = slugify(name)
-	domain := strings.TrimSpace(projDomain.Text())
-	if domain == "" {
-		domain = name + ".test"
-	}
 
-	app.appendLog(fmt.Sprintf("projects: creating '%s' (%s) at %s.test ...",
-		name, f.Name, name))
+	// Domain: optional name override + required extension. If the
+	// name field is empty we default to the project slug, so the
+	// usual case "type project name → click Create" still works.
+	domainName := strings.TrimSpace(projDomainNm.Text())
+	if domainName == "" {
+		domainName = name
+	}
+	ext := projDomainExt.CurrentText()
+	if ext == "" {
+		ext = ".test"
+	}
+	domain := domainName + ext
+
+	app.appendLog(fmt.Sprintf("projects: creating '%s' (%s) at %s ...",
+		name, f.Name, domain))
 	go func() {
 		if err := createProject(f, name, domain, app.appendLog); err != nil {
 			app.appendLog("projects: " + err.Error())
@@ -1162,6 +1291,37 @@ func onCreateProject() {
 			refreshVhostList()
 		})
 	}()
+}
+
+// splitDomain breaks a "name.ext" string into ("name", ".ext"). The
+// split is on the LAST dot so multi-part names like "api.myapp.test"
+// round-trip cleanly: name="api.myapp", ext=".test". Domains with no
+// dot at all return ("name", ".test") so the caller still has a
+// usable extension default.
+func splitDomain(domain string) (string, string) {
+	domain = strings.TrimSpace(domain)
+	i := strings.LastIndex(domain, ".")
+	if i < 0 {
+		return domain, ".test"
+	}
+	return domain[:i], domain[i:]
+}
+
+// setDomainExtSelection picks the matching item in the extension
+// combobox for the given ".ext" string. Falls back to index 0
+// (.test) when the extension isn't in our curated list — keeps the
+// dropdown deterministic instead of showing a stale leftover.
+func setDomainExtSelection(combo *ui.ComboBox, ext string) {
+	if combo == nil {
+		return
+	}
+	for i, e := range domainExtensions {
+		if strings.EqualFold(e, ext) {
+			combo.SelectIndex(i)
+			return
+		}
+	}
+	combo.SelectIndex(0)
 }
 
 // slugify turns "My App" into "my-app" — lowercase, alphanumerics
@@ -1331,12 +1491,19 @@ func selectedVhostIndex() int {
 }
 
 // readVhostForm parses the inline vhost editor fields into a Vhost
-// struct, validating port and required fields.
+// struct, validating port and required fields. The domain is
+// reassembled from the split name + extension widgets — e.g.
+// "myapp" + ".test" → "myapp.test".
 func readVhostForm() (Vhost, error) {
-	domain := strings.TrimSpace(vhostDomain.Text())
-	if domain == "" {
-		return Vhost{}, fmt.Errorf("domain is required")
+	name := strings.TrimSpace(vhostDomainNm.Text())
+	if name == "" {
+		return Vhost{}, fmt.Errorf("domain name is required")
 	}
+	ext := vhostDomainExt.CurrentText()
+	if ext == "" {
+		ext = ".test"
+	}
+	domain := name + ext
 	docroot := strings.TrimSpace(vhostDocRoot.Text())
 	if docroot == "" {
 		return Vhost{}, fmt.Errorf("docroot is required")

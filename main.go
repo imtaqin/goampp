@@ -131,18 +131,29 @@ func main() {
 		return 0
 	})
 
-	// WM_COMMAND routing for tray popup-menu items. windigo's
-	// WmCommand handler expects per-id registration, but since the
-	// tray menu IDs are dynamic and far above the control ID range
-	// we just intercept the raw WM_COMMAND and dispatch ourselves.
-	wnd.On().Wm(co.WM_COMMAND, func(p ui.Wm) uintptr {
-		cmdId := uint16(p.WParam.LoWord())
-		if handleTrayMenuCommand(wnd, cmdId) {
-			return 0
-		}
-		// Fall through: not a tray menu, let windigo's normal
-		// WM_COMMAND routing handle it (the button clicks).
-		return 0
+	// Tray popup-menu commands. Each menu item is dispatched via a
+	// dedicated WmCommand handler keyed on (cmdId, notifCode=CMD_MENU).
+	//
+	// Why we can't use a generic Wm(WM_COMMAND, ...) handler here:
+	// windigo's processLast() special-cases WM_COMMAND so it ONLY
+	// walks the WmCommand list (me.cmds), never the generic Wm
+	// list (me.msgs). A handler registered via wnd.On().Wm(...) is
+	// silently never invoked for WM_COMMAND messages — which is
+	// why the tray Quit button used to look broken.
+	wnd.On().WmCommand(trayMenuIdShow, co.CMD_MENU, func() {
+		showMainWindow(wnd)
+	})
+	wnd.On().WmCommand(trayMenuIdStart, co.CMD_MENU, func() {
+		go startEssentialStack()
+	})
+	wnd.On().WmCommand(trayMenuIdStop, co.CMD_MENU, func() {
+		go stopAllServices()
+	})
+	wnd.On().WmCommand(trayMenuIdAutorun, co.CMD_MENU, func() {
+		toggleAutoStart()
+	})
+	wnd.On().WmCommand(trayMenuIdQuit, co.CMD_MENU, func() {
+		quitApp(wnd)
 	})
 
 	// Minimize-to-tray: when the window gets minimised, hide it and
@@ -264,13 +275,22 @@ func (a *App) appendLog(line string) {
 	}
 	a.wnd.UiThread(func() {
 		a.logBox.SetText(text)
-		// Auto-scroll: move the caret to the very end of the buffer
-		// (EM_SETSEL with -1, -1 is the "end of text" sentinel) then
-		// EM_SCROLLCARET which scrolls the view to make the caret
-		// visible. Combined this pins the log to the bottom on every
-		// append — standard tail behaviour.
+		// Auto-scroll the log Edit control to the bottom on every
+		// append. There's a subtle gotcha here: the obvious idiom
+		//
+		//   SendMessage(EM_SETSEL, -1, -1)
+		//
+		// doesn't move the caret to the end of the buffer — passing
+		// WPARAM=-1 tells the edit control to *deselect* the
+		// current selection (per MSDN: "If the start is -1, any
+		// current selection is deselected."). The fix is to use a
+		// positive sentinel that exceeds any plausible buffer size;
+		// 0x7FFFFFFF gets clamped to the actual text length, which
+		// puts the caret at the end. EM_SCROLLCARET then brings the
+		// caret into view, which is the actual auto-scroll.
+		const eot = uintptr(0x7FFFFFFF)
 		h := a.logBox.Hwnd()
-		h.SendMessage(co.EM_SETSEL, win.WPARAM(^uintptr(0)), win.LPARAM(^uintptr(0)))
+		h.SendMessage(co.EM_SETSEL, win.WPARAM(eot), win.LPARAM(eot))
 		h.SendMessage(co.EM_SCROLLCARET, 0, 0)
 	})
 }

@@ -197,6 +197,40 @@ func RemoveGoamppFromUserPath() (int, error) {
 	return removed, nil
 }
 
+// IsElevated reports whether the current process is running with
+// admin rights. Used by the Settings UI to grey out "Restart as
+// Administrator" when we already are.
+func IsElevated() bool {
+	var token windows.Token
+	err := windows.OpenProcessToken(windows.CurrentProcess(),
+		windows.TOKEN_QUERY, &token)
+	if err != nil {
+		return false
+	}
+	defer token.Close()
+	return token.IsElevated()
+}
+
+// RelaunchElevated triggers a UAC prompt and starts a new goampp
+// process as administrator. The current (non-elevated) instance
+// then exits cleanly via quitApp so we don't end up with two
+// running side by side fighting over the same config + ports.
+//
+// If the user dismisses the UAC prompt, ShellExecute returns an
+// error and we just stay running unelevated.
+func RelaunchElevated() error {
+	exe, err := os.Executable()
+	if err != nil {
+		return err
+	}
+	verb, _ := syscall.UTF16PtrFromString("runas")
+	file, _ := syscall.UTF16PtrFromString(exe)
+	if err := windows.ShellExecute(0, verb, file, nil, nil, windows.SW_NORMAL); err != nil {
+		return fmt.Errorf("UAC: %w", err)
+	}
+	return nil
+}
+
 // broadcastEnvChange sends WM_SETTINGCHANGE with lParam="Environment"
 // to every top-level window so anything listening (Explorer,
 // Terminal, IDEs) refreshes its env block. Without this, only newly

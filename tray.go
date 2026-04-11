@@ -207,26 +207,11 @@ func appendMenuItem(hMenu win.HMENU, flags co.MF, id uintptr, text string) {
 	)
 }
 
-// handleTrayMenuCommand dispatches a menu ID that came back through a
-// WM_COMMAND. Called from the main window proc after the user picks
-// an item from the tray context menu.
-func handleTrayMenuCommand(wnd *ui.Main, cmdId uint16) bool {
-	switch cmdId {
-	case trayMenuIdShow:
-		showMainWindow(wnd)
-	case trayMenuIdStart:
-		go startEssentialStack()
-	case trayMenuIdStop:
-		go stopAllServices()
-	case trayMenuIdAutorun:
-		toggleAutoStart()
-	case trayMenuIdQuit:
-		quitApp(wnd)
-	default:
-		return false
-	}
-	return true
-}
+// (handleTrayMenuCommand was removed: tray menu items are now wired
+// directly via wnd.On().WmCommand(id, CMD_MENU, fn) in main.go.
+// windigo's WM_COMMAND dispatch only walks its WmCommand list, so
+// the generic Wm(WM_COMMAND, ...) interceptor we used to have was
+// never actually called.)
 
 // startEssentialStack is the tray menu's "Start Stack" action —
 // mirrors the button on the Services page. Runs off the UI thread

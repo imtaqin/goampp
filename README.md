@@ -1,99 +1,170 @@
 # GoAMPP
 
-A tiny, native Windows XAMPP-style control panel written in Go + [windigo](https://github.com/rodrigocfd/windigo).
+A native Windows web-stack control panel written in Go. **One 7 MB binary** that downloads Apache, MariaDB, PHP, Node.js, Python, Go, Java, and friends on demand — no installer bloat, no Docker, no WSL, no Electron.
 
-![GoAMPP services dashboard](assets/image/screen1.png)
+[![release](https://img.shields.io/github/v/release/imtaqin/goampp)](https://github.com/imtaqin/goampp/releases/latest)
+[![license](https://img.shields.io/github/license/imtaqin/goampp)](LICENSE)
 
-- Native Win32 widgets (no CGO, no webview, no Electron)
-- Single `.exe`, ~7 MB
-- Per-service Start / Stop / Restart / Conf buttons on every card
-- Real-time log viewer with download progress bar
-- Port collision detection + automatic zombie-process cleanup
-- Auto-installs services on demand (Apache, Nginx, MariaDB, PostgreSQL, Redis, PHP, phpMyAdmin, Adminer)
-- Auto-installs language runtimes (Node.js, Python, Go, Java)
-- 17 framework scaffolders (Laravel, Symfony, WordPress, Next.js, Express, NestJS, AdonisJS, Vite+React, Flask, Django, FastAPI, Gin, Spring Boot, ...)
-- Auto-creates virtual hosts (writes hosts file + Apache vhosts.conf)
-- System tray + minimize-to-tray + auto-start on Windows boot
-- Add bundled tools to user PATH from the Settings page
+![GoAMPP services dashboard](assets/image/services.png)
 
-## Folder layout
+## Features
+
+- **8 services** in the catalog — Apache, Nginx, MariaDB (as MySQL), PostgreSQL, Redis, PHP-FPM, phpMyAdmin, Adminer
+- **4 language runtimes** — Node.js LTS, Python (embeddable + auto-bootstrapped pip), Go, Eclipse Temurin JDK 21
+- **17 framework scaffolders** — Laravel, Laravel + Livewire, Symfony, CodeIgniter 4, WordPress, Next.js, Vite + React, Express, NestJS, AdonisJS, Flask, Django, FastAPI, Go net/http, Gin, Spring Boot, Static HTML
+- **Auto-vhost creation** — writes to Windows hosts file + Apache `vhosts.conf` + Nginx `sites/`
+- **Reverse-proxy vhosts** for Node/Python/Go/Java dev servers (Apache forwards `/` → `127.0.0.1:port`)
+- **System tray** with minimize-to-tray, close-to-tray, and auto-start on Windows boot
+- **Built-in text editor** for service config files (no `notepad.exe` shell-out)
+- **"Add tools to PATH"** — appends `bin/*` dirs to user PATH (HKCU registry, broadcasts `WM_SETTINGCHANGE`)
+- **Per-card action buttons** (Start / Stop / Restart / Conf), real-time log viewer, download progress bar
+- **Process zombie sweep** at startup — cleans stale `httpd.exe` / `mysqld.exe` from prior crashes
+- **Per-user install** — no admin needed for the installer; the app elevates on demand only when writing the hosts file
+
+## Screenshots
+
+### Services dashboard
+12 service cards in a 4×3 grid, each with its own logo and Start/Stop/Restart/Conf buttons.
+
+![Services dashboard](assets/image/services.png)
+
+### Projects — auto-scaffold + auto-vhost
+Pick a framework, type a name, click Create. Composer/npm/pip/go runs in the background, the vhost is registered, and the project is yours.
+
+![Projects page](assets/image/projects.png)
+
+### Virtual Hosts
+List of registered vhosts with an inline form. Domain split into name + extension dropdown so you can't accidentally hit HSTS-preloaded TLDs like `.dev`.
+
+![Virtual Hosts page](assets/image/vhosts.png)
+
+### Built-in editor
+Multi-line text editor for `httpd.conf`, `php.ini`, `my.ini`, `redis.conf`, `config.inc.php`, the Windows hosts file, and `config.json`. No notepad shell-out, no external dependencies.
+
+![Editor page](assets/image/editor.png)
+
+### Settings
+Path overview, runtime status (PHP / Composer / Node / Python / Java / Go), elevation status, and global actions including the "Restart as Administrator" relauncher.
+
+![Settings page](assets/image/settings.png)
+
+## Install
+
+Grab the latest installer from the [Releases page](https://github.com/imtaqin/goampp/releases/latest):
 
 ```
-goampp/
-├── goampp.exe           # built binary (you build this)
-├── main.go              # UI (windigo)
-├── service.go           # process manager
-├── bin/
-│   ├── apache/httpd.exe # drop Apache here
-│   ├── mysql/mysqld.exe # drop MySQL here
-│   └── php/             # drop PHP here (optional)
-├── conf/
-│   ├── apache/*.conf    # Apache configs (opened by the "Config" button)
-│   └── mysql/*.ini
-├── logs/                # service log output
-└── www/                 # document root (htdocs)
+goampp-setup-X.Y.Z.exe   ~5.4 MB
 ```
 
-## Requirements
+Per-user install (no admin needed). Lands at `%LOCALAPPDATA%\GoAMPP`. The installer creates the empty `bin/`, `downloads/`, `tmp/`, `logs/`, `conf/`, and `www/` directories — everything else gets fetched on first start.
 
-- **Go 1.21+ (64-bit)**. windigo uses constants that overflow 32-bit `int`, so
-  a 386 toolchain won't compile it natively. If you have 32-bit Go installed,
-  you can still cross-compile by setting `GOARCH=amd64` (the `build.bat` script
-  already does this).
+## First run
 
-## Build
+1. **Click any service card's Start button** — GoAMPP downloads + extracts that service's binaries on the fly. First run installs ~12 MB for Apache, ~80 MB for MariaDB, etc.
+2. **Click "Start Stack"** below the grid to boot the essential web stack (Apache + MariaDB + phpMyAdmin) in one go.
+3. **Open <http://localhost/phpmyadmin/>** — login as `root` with no password.
+4. **Switch to the Projects tab** to scaffold a Laravel/Symfony/Express/Flask/Django/etc. project with auto-vhost.
+
+## Build from source
+
+Requires **Go 1.21+ (64-bit)**.
+
+```bash
+git clone https://github.com/imtaqin/goampp
+cd goampp
+go build -ldflags="-H windowsgui -s -w" -trimpath -o goampp.exe .
+```
+
+Or use the helper batch file (sets `GOARCH=amd64` for 32-bit Go installs):
 
 ```cmd
 build.bat
 ```
 
-or manually:
+Output is a single 7 MB `goampp.exe`. Run it next to `goampp.exe.manifest`, `logo.ico`, and `assets/icons/*.ico` (all in the repo).
 
-```cmd
-set GOARCH=amd64
-go build -ldflags="-H windowsgui -s -w" -trimpath -o goampp.exe .
+## Project layout
+
+```
+goampp/
+├── main.go                 # entry point + WM_CREATE wiring
+├── service.go              # process lifecycle (start/stop/log capture)
+├── download.go             # service catalog + downloader/extractor
+├── frameworks.go           # framework scaffolders (Laravel, Next.js, ...)
+├── vhost.go                # hosts file + Apache/Nginx vhost writers
+├── tray.go                 # system tray icon + popup menu
+├── ui_tabs.go              # 5 pages (Services/Projects/Editor/Vhosts/Settings)
+├── icons.go                # service logo loading via STM_SETICON
+├── paint.go                # owner-drawn coloured buttons
+├── pathenv.go              # "Add to PATH" + "Restart as Admin"
+├── zombies.go              # PowerShell-based stale-process sweep
+├── config.go               # config.json load/save
+├── assets/icons/*.ico      # 17 service & framework logos (32×32)
+├── icon/*.png              # source PNGs (run tools/makelogos to refresh)
+├── tools/makeicon/         # one-shot PNG → ICO converter
+└── tools/makelogos/        # bulk logo generator (icon/*.png → assets/icons/*.ico)
 ```
 
-Optional: shrink further with [UPX](https://upx.github.io):
+What's in `bin/`, `downloads/`, `logs/`, `tmp/`, `conf/`, and `www/` is gitignored — those directories are populated at runtime.
 
-```cmd
-upx --best goampp.exe
-```
+## How it works (technical highlights)
 
-Typical sizes: ~2.7 MB stripped → ~1 MB after UPX.
+### Services are downloaded, not bundled
+The catalog in `download.go` keys each service by name to a `DownloadSpec` with the URL, install dir, top-level strip prefix, post-install hook, and check file. Click Start → spawn a goroutine → HTTP fetch → atomic rename → extract → run hook → start the process. Cached in `downloads/` so reinstalls skip the network.
 
-## Adding Apache / MySQL
+### PHP runs via classic CGI, not FastCGI
+Apache's `mod_proxy_fcgi` has a 12-year-old Windows bug ([Apache #55345](https://bz.apache.org/bugzilla/show_bug.cgi?id=55345)) where it concatenates the upstream URL with the script's drive-letter path, producing `fcgi://127.0.0.1:9000C:/...` and failing DNS. GoAMPP sidesteps it entirely by using `mod_cgi` + `mod_actions` + `ScriptAlias` to invoke `php-cgi.exe` directly. Slower per request than FastCGI, infinitely more reliable on Windows.
 
-1. Download the Windows binaries (e.g. from Apache Lounge, MariaDB).
-2. Extract into `bin/apache/` and `bin/mysql/`.
-3. Put configs under `conf/apache/httpd.conf` and `conf/mysql/my.ini`.
-4. Run `goampp.exe`.
+### Process tree kills, not bare `Kill()`
+Apache's winnt MPM forks worker children that survive when you kill the parent. `cmd.Process.Kill()` leaves zombies on port 80. The Stop button uses `taskkill /F /T /PID` (the `/T` flag walks the tree) so child processes get cleaned up too.
 
-## Adding more services
+### Startup zombie sweep via PowerShell
+On launch, GoAMPP enumerates every process via PowerShell (`Get-Process | Where-Object { $_.Path }`), filters to anything whose image lives inside `<goampp>/bin/`, and `taskkill /F /T`'s each one. Cleans up stale workers from prior crashes so the next Start doesn't hit "port already in use". Originally used `wmic` but Microsoft removed that from Win11 22H2+.
 
-Edit `main.go` — the `services` slice near the top of `main()`. Each service
-is just:
+### Card grid with per-card buttons
+The Services view is a hand-built 4×3 grid of widget bundles, not a ListView. Each card holds an `SS_ICON` Static for the logo, three Statics for name/status/version, and four owner-drawn coloured Buttons for Start/Stop/Restart/Conf. Per-card buttons cut the click count in half compared to the "select row → click action" XAMPP pattern.
 
-```go
-&Service{
-    Name:    "PostgreSQL",
-    ExePath: filepath.Join(baseDir, "bin", "pgsql", "bin", "postgres.exe"),
-    Args:    []string{"-D", "../data"},
-    Port:    5432,
-    WorkDir: filepath.Join(baseDir, "bin", "pgsql", "bin"),
-}
-```
+### Coloured buttons via owner-draw
+windigo's default Buttons render with the system theme (gray/white). GoAMPP overrides them with `BS_OWNERDRAW` style + a `WM_DRAWITEM` handler that paints the background with a cached `HBRUSH` (created via direct `gdi32!CreateSolidBrush` syscall — windigo doesn't expose it). Each button registers its colour scheme in a per-ctrl-ID map; the draw handler looks it up and fills accordingly. Green Start, red Stop, orange Restart, blue Conf, slate neutral.
 
-Add a matching row in the layout loop — done.
+### Tray menu via raw `AppendMenuW`
+The tray right-click menu is built with `CreatePopupMenu` + raw `user32!AppendMenuW` syscalls (windigo only exposes the verbose `InsertMenuItem` API that takes a `MENUITEMINFO`). Menu commands route through `wnd.On().WmCommand(id, CMD_MENU, fn)` rather than the generic `Wm(WM_COMMAND, ...)` handler — windigo's `processLast()` special-cases WM_COMMAND and only walks the `cmds` list, so generic interceptors are silently dropped.
 
-## Notes
+## Troubleshooting
 
-- Binding port 80 usually needs **administrator privileges**. Right-click
-  `goampp.exe` → Run as administrator, or bundle a manifest that forces UAC
-  elevation.
-- `os.Exit(0)` from "Stop all && quit" hard-kills the process. The stop
-  routine `Process.Kill()`s children first, but Apache/MySQL may leave stale
-  pid files; that's normal.
-- The log viewer re-sets the full buffer on each append (simple but fine for
-  a control panel). Swap to `EM_SETSEL` + `EM_REPLACESEL` if you plan to log
-  megabytes.
+### "Access is denied" when applying virtual hosts
+Writing to `C:\Windows\System32\drivers\etc\hosts` requires admin. Click **Restart as Administrator** on the Settings page — GoAMPP `ShellExecute("runas", goampp.exe)` triggers a UAC prompt and the elevated instance takes over from the current one cleanly.
+
+### "Port 80 already in use"
+Either:
+- IIS / Skype / World Wide Web Publishing Service is running. Stop them via `services.msc` or `net stop w3svc`.
+- A previous GoAMPP-managed Apache crashed and left a worker zombie. The startup sweep should catch this — if it doesn't, run **Restart Stack** which kills zombies + cleans up + starts fresh.
+
+### Apache `AH00558: Could not reliably determine the server's fully qualified domain name`
+Harmless. The post-install hook patches `httpd.conf` to set `ServerName localhost:80` automatically; if you see this warning anyway, your `httpd.conf` is from an older install. Run **Apache → Conf → edit `ServerName`** in the built-in editor or reinstall Apache from the Services tab.
+
+### MySQL won't start: `InnoDB: ./ibdata1 must be writable`
+The data directory wasn't seeded. The post-install hook normally runs `mariadb-install-db.exe` automatically. If it didn't, delete `bin/mysql/` and reinstall from the Services tab.
+
+## Comparison to existing Windows stacks
+
+| | GoAMPP | XAMPP | Laragon | Docker Desktop |
+|---|---|---|---|---|
+| Installer size | **5.4 MB** | ~200 MB | ~100 MB | ~600 MB |
+| Admin required to install | ❌ | ✅ | ❌ | ✅ |
+| Native Win32 (no runtime) | ✅ | ✅ | ✅ | ❌ (HyperV/WSL) |
+| Auto-installs services on demand | ✅ | ❌ | ❌ | N/A |
+| Bundles Mercury Mail / Tomcat | ❌ | ✅ | ❌ | ❌ |
+| Built-in framework scaffolding | ✅ (17 templates) | ❌ | ✅ (PHP only) | ❌ |
+| Auto-vhost on project create | ✅ | ❌ | ✅ | ❌ |
+| Open source | ✅ MIT | ✅ | ❌ | ❌ |
+
+## Contributing
+
+Issues and pull requests welcome at [github.com/imtaqin/goampp](https://github.com/imtaqin/goampp).
+
+If a download URL in `download.go` goes stale, file an issue with the service name and I'll bump the catalog. The service URLs use whatever upstream publishes (Apache Lounge for Apache, archive.mariadb.org for MariaDB, etc.) so they age out over time.
+
+## License
+
+MIT. Service logos under `assets/icons/` and `icon/` are trademarks of their respective owners and used here purely for identification.

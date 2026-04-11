@@ -13,6 +13,10 @@ dist/
 installer/
 build-installer.bat
 
+# Personal marketing drafts (dev.to / LinkedIn / blog posts) — kept
+# next to the code while I edit them, not part of the project.
+articles/
+
 # Claude Code local settings (personal preferences, machine-specific)
 .claude/
 
