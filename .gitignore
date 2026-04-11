@@ -5,6 +5,14 @@ goampp.exe~
 *~
 *.syso
 
+# Inno Setup output (built installer + temp logs)
+dist/
+
+# Installer scripts are local-only — the .exe ships via GitHub Releases,
+# not via the source tree.
+installer/
+build-installer.bat
+
 # Claude Code local settings (personal preferences, machine-specific)
 .claude/
 
