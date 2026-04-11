@@ -2,11 +2,19 @@
 
 A tiny, native Windows XAMPP-style control panel written in Go + [windigo](https://github.com/rodrigocfd/windigo).
 
+![GoAMPP services dashboard](assets/image/screen1.png)
+
 - Native Win32 widgets (no CGO, no webview, no Electron)
-- Single `.exe`, ~2-3 MB
-- Start / Stop / Config buttons for Apache and MySQL
-- Real-time log viewer
-- Port collision detection (won't start Apache if :80 is busy)
+- Single `.exe`, ~7 MB
+- Per-service Start / Stop / Restart / Conf buttons on every card
+- Real-time log viewer with download progress bar
+- Port collision detection + automatic zombie-process cleanup
+- Auto-installs services on demand (Apache, Nginx, MariaDB, PostgreSQL, Redis, PHP, phpMyAdmin, Adminer)
+- Auto-installs language runtimes (Node.js, Python, Go, Java)
+- 17 framework scaffolders (Laravel, Symfony, WordPress, Next.js, Express, NestJS, AdonisJS, Vite+React, Flask, Django, FastAPI, Gin, Spring Boot, ...)
+- Auto-creates virtual hosts (writes hosts file + Apache vhosts.conf)
+- System tray + minimize-to-tray + auto-start on Windows boot
+- Add bundled tools to user PATH from the Settings page
 
 ## Folder layout
 
