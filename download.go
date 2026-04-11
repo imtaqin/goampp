@@ -195,9 +195,8 @@ var DownloadCatalog = map[string]DownloadSpec{
 			// become visible to Apache the moment they're scaffolded.
 			// Idempotent: we guard by sentinel comment so repeat
 			// post-installs don't stack the Include line.
-			vhostsInc := strings.ReplaceAll(
-				filepath.Join(baseDir, "conf", "apache", "vhosts.conf"),
-				`\`, `/`)
+			vhostsFS := filepath.Join(baseDir, "conf", "apache", "vhosts.conf")
+			vhostsInc := strings.ReplaceAll(vhostsFS, `\`, `/`)
 			if !strings.Contains(patched, "GoAMPP vhost include BEGIN") {
 				patched += "\r\n# >>> GoAMPP vhost include BEGIN <<<\r\n"
 				patched += fmt.Sprintf("Include \"%s\"\r\n", vhostsInc)
@@ -215,6 +214,26 @@ var DownloadCatalog = map[string]DownloadSpec{
 			// to start. We don't populate it — the user drops their
 			// own files in.
 			_ = os.MkdirAll(docroot, 0o755)
+
+			// Seed vhosts.conf with a default catch-all <VirtualHost>
+			// for localhost. Without this file, Apache fails to start
+			// on fresh installs because we added an `Include` pointing
+			// at a file that doesn't exist yet — no project has been
+			// scaffolded to trigger writeApacheVhosts for the first
+			// time. We create it only if it's absent so we don't
+			// clobber user-written vhosts on a reinstall.
+			if _, err := os.Stat(vhostsFS); os.IsNotExist(err) {
+				if err := os.MkdirAll(filepath.Dir(vhostsFS), 0o755); err != nil {
+					return err
+				}
+				// Emit just the header + default localhost vhost. Real
+				// user vhosts get written later by ApplyVhosts when
+				// someone creates a project.
+				if err := writeApacheVhosts(vhostsFS, baseDir, nil); err != nil {
+					return err
+				}
+				log("  seeded empty vhosts.conf with default localhost catch-all")
+			}
 			return nil
 		},
 	},
