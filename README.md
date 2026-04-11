@@ -56,7 +56,9 @@ Grab the latest installer from the [Releases page](https://github.com/imtaqin/go
 goampp-setup-X.Y.Z.exe   ~5.4 MB
 ```
 
-Per-user install (no admin needed). Lands at `%LOCALAPPDATA%\GoAMPP`. The installer creates the empty `bin/`, `downloads/`, `tmp/`, `logs/`, `conf/`, and `www/` directories — everything else gets fetched on first start.
+Installs to **`C:\goampp`** — the short path matches the XAMPP / Laragon convention and dodges MAX_PATH issues that bite deeply-nested project paths on Windows. The installer needs admin once (writing to the system drive root), but grants `users-modify` on every runtime subdirectory so goampp itself runs unelevated after install. Only the one-time install plus future hosts-file edits (for virtual hosts) hit UAC.
+
+The installer creates empty `bin/`, `downloads/`, `tmp/`, `logs/`, `conf/`, and `www/` directories — everything else gets fetched on first start.
 
 ## First run
 
