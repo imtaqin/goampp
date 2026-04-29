@@ -46,6 +46,10 @@ type GlobalSettings struct {
 	// NginxSitesDir writes per-site server { } blocks into this directory.
 	// Empty disables Nginx vhost generation.
 	NginxSitesDir string `json:"nginx_sites_dir"`
+	// ActiveWebServer is "Apache" or "Nginx" — only the chosen one is
+	// startable from the Services page. Default Apache so existing
+	// configs without the field act exactly like before.
+	ActiveWebServer string `json:"active_web_server,omitempty"`
 }
 
 // ServiceConf is the JSON-friendly flat description of a service. The live
@@ -71,6 +75,11 @@ type ServiceConf struct {
 	// OpenURL — if set, Services tab shows an "Open" button that launches
 	// this URL in the default browser. Useful for phpMyAdmin / Adminer.
 	OpenURL string `json:"open_url,omitempty"`
+	// ActiveVersion is the variant version the user picked from the
+	// per-card right-click menu (e.g. "8.4" for PHP, "20" for Node).
+	// Empty means "use the catalogue's flat default URL". Persisted
+	// to config.json so version choices stick across restarts.
+	ActiveVersion string `json:"active_version,omitempty"`
 }
 
 // Vhost describes one virtual host. A vhost may map to Apache, Nginx, or both;
@@ -107,6 +116,37 @@ func LoadConfig(baseDir string) (*Config, error) {
 	var cfg Config
 	if err := json.Unmarshal(data, &cfg); err != nil {
 		return nil, fmt.Errorf("parse config: %w", err)
+	}
+	// Migration: older configs (before the multi-web-server picker
+	// landed) don't have ActiveWebServer set, and may also have
+	// Nginx.Enabled=true left over from an earlier default. Force
+	// Apache to be the on-by-default web server unless the user has
+	// explicitly switched in this same session — and persist back so
+	// the next launch reads a clean file.
+	migrated := false
+	if cfg.Settings.ActiveWebServer == "" {
+		cfg.Settings.ActiveWebServer = "Apache"
+		migrated = true
+	}
+	for i := range cfg.Services {
+		switch cfg.Services[i].Name {
+		case "Apache":
+			if !cfg.Services[i].Enabled {
+				cfg.Services[i].Enabled = true
+				migrated = true
+			}
+		case "Nginx":
+			// Only flip Nginx OFF when the active server is Apache
+			// (the default). If a user picked Nginx as active we
+			// leave their choice alone — they want it enabled.
+			if cfg.Settings.ActiveWebServer == "Apache" && cfg.Services[i].Enabled {
+				cfg.Services[i].Enabled = false
+				migrated = true
+			}
+		}
+	}
+	if migrated {
+		_ = SaveConfig(baseDir, &cfg)
 	}
 	return &cfg, nil
 }
@@ -191,9 +231,13 @@ func DefaultConfig(baseDir string) *Config {
 				Enabled: true,
 			},
 			{
+				// Single-file PHP admin client. Cheap to install and
+				// it covers MySQL/MariaDB AND PostgreSQL — enabled
+				// by default so the welcome page's PostgreSQL Admin
+				// tile actually opens something usable.
 				Name: "Adminer", Kind: "tool",
 				OpenURL: "http://localhost/adminer/",
-				Enabled: false,
+				Enabled: true,
 			},
 
 			// ----- Language runtimes (no long-running process) -----
@@ -225,6 +269,7 @@ func DefaultConfig(baseDir string) *Config {
 			HostsFile:           "",
 			ApacheVhostsInclude: "{base}/conf/apache/vhosts.conf",
 			NginxSitesDir:       "{base}/conf/nginx/sites",
+			ActiveWebServer:     "Apache",
 		},
 	}
 }

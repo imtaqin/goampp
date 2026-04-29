@@ -73,12 +73,31 @@ const apachePhpHandlerTemplate = `
 
 # >>> GoAMPP PHP handler BEGIN — do not edit between these markers <<<
 # Classic CGI handler (see download.go for the rationale).
+#
+# Why both <Directory> AND <Location> grants:
+# When Apache 2.4 services a .php request, the Action directive
+# triggers an internal sub-request to /__goampp-php-bin__/php-cgi.exe.
+# That sub-request is evaluated against URL-space first (<Location>),
+# THEN filesystem-space (<Directory>). The shipped httpd.conf has a
+# global <Directory /> with "Require all denied" — without an explicit
+# <Location> grant, the URL-space walk inherits that deny and the
+# request 403s with: "client denied by server configuration:
+# C:/goampp/bin/php" before our <Directory "C:/goampp/bin/php"> grant
+# is even consulted. Adding <Location "/__goampp-php-bin__/"> with
+# Require all granted bypasses the filesystem deny entirely for this
+# specific URL prefix.
 ScriptAlias "/__goampp-php-bin__/" "%s/"
 <Directory "%s">
     AllowOverride None
     Options +ExecCGI
+    <Files "php-cgi.exe">
+        Require all granted
+    </Files>
     Require all granted
 </Directory>
+<Location "/__goampp-php-bin__/">
+    Require all granted
+</Location>
 AddHandler application/x-httpd-php .php
 Action application/x-httpd-php "/__goampp-php-bin__/php-cgi.exe"
 # <<< GoAMPP PHP handler END >>>
@@ -111,6 +130,37 @@ type DownloadSpec struct {
 	PostInstall func(installDir string, log func(string)) error
 	// Notes shown in the log when installation starts. Optional.
 	Notes string
+
+	// Variants enumerates all installable versions (e.g. PHP 8.2/8.3/8.4/8.5).
+	// When non-nil, DownloadAndInstall(name, version, ...) reads URL +
+	// FileName from the matching variant instead of the spec's flat URL,
+	// and installs into "{InstallDir}-{version}" (e.g. bin/php-8.4)
+	// instead of InstallDir directly. The active variant is then exposed
+	// at the canonical InstallDir via a directory junction so existing
+	// service ExePath references (e.g. bin/php/php-cgi.exe) just work.
+	//
+	// Empty for single-version services (Apache, MariaDB, Postgres,
+	// Redis, phpMyAdmin, Adminer) — the historical flat-URL path applies.
+	Variants []VariantSpec
+}
+
+// VariantSpec is one installable version inside a DownloadSpec.
+// Exists so the service catalogue can carry e.g. PHP 7.4 and PHP 8.5
+// side by side without duplicating the rest of the spec (CheckFile,
+// PostInstall, etc).
+type VariantSpec struct {
+	// Version is the human-readable label shown in the per-card
+	// version dropdown (e.g. "8.4", "20", "3.12"). Used as the
+	// suffix when computing the install directory:
+	// bin/php-{Version} → bin/php-8.4. Pick a slug that's
+	// filesystem-safe; semver dots are fine on Windows.
+	Version  string
+	URL      string
+	FileName string
+	StripTop string
+	// Notes overrides the parent DownloadSpec.Notes when this variant
+	// is selected. Useful for "this version requires VC++ 14.x".
+	Notes string
 }
 
 // DownloadCatalog maps ServiceConf.Name → DownloadSpec. URLs were verified
@@ -124,7 +174,12 @@ var DownloadCatalog = map[string]DownloadSpec{
 		InstallDir: "bin/apache",
 		StripTop:   "Apache24/",
 		Kind:       "zip",
-		CheckFile:  "bin/httpd.exe",
+		// Sentinel must prove the FULL extraction succeeded, not just that
+		// httpd.exe landed somewhere. Apache won't even start without
+		// conf/httpd.conf, so use that — antivirus quarantine or an
+		// interrupted unzip leaves bin/ but trims conf/, and a single-
+		// file check would still report "installed" against that wreck.
+		CheckFile:  "conf/httpd.conf",
 		Notes:      "Apache Lounge build — requires VC++ 2015-2022 Redistributable.",
 		PostInstall: func(installDir string, log func(string)) error {
 			// Apache's shipped httpd.conf needs a fistful of tweaks
@@ -215,25 +270,14 @@ var DownloadCatalog = map[string]DownloadSpec{
 			// own files in.
 			_ = os.MkdirAll(docroot, 0o755)
 
-			// Seed vhosts.conf with a default catch-all <VirtualHost>
-			// for localhost. Without this file, Apache fails to start
-			// on fresh installs because we added an `Include` pointing
-			// at a file that doesn't exist yet — no project has been
-			// scaffolded to trigger writeApacheVhosts for the first
-			// time. We create it only if it's absent so we don't
-			// clobber user-written vhosts on a reinstall.
-			if _, err := os.Stat(vhostsFS); os.IsNotExist(err) {
-				if err := os.MkdirAll(filepath.Dir(vhostsFS), 0o755); err != nil {
-					return err
-				}
-				// Emit just the header + default localhost vhost. Real
-				// user vhosts get written later by ApplyVhosts when
-				// someone creates a project.
-				if err := writeApacheVhosts(vhostsFS, baseDir, nil); err != nil {
-					return err
-				}
-				log("  seeded empty vhosts.conf with default localhost catch-all")
-			}
+			// Seed vhosts.conf + welcome page + phpinfo shortcut.
+			// All three are idempotent — the helper only writes
+			// files that don't exist yet, so reinstalls preserve
+			// the user's custom edits. See welcome.go for the
+			// shared ensureApacheRuntimeFiles implementation;
+			// main.go's WmCreate handler calls the same helper on
+			// every launch so upgraded installs self-heal too.
+			ensureApacheRuntimeFiles(baseDir, log)
 			return nil
 		},
 	},
@@ -247,10 +291,27 @@ var DownloadCatalog = map[string]DownloadSpec{
 		CheckFile:  "nginx.exe",
 	},
 	"PHP-FPM": {
+		// Default Version label for the legacy single-version flow —
+		// kept so older configs without an active_version still work.
+		// When the user picks a different version from the card's
+		// dropdown, that variant's URL takes over.
 		Version:    "8.5.5 NTS x64",
 		URL:        "https://downloads.php.net/~windows/releases/php-8.5.5-nts-Win32-vs17-x64.zip",
 		FileName:   "php-8.5.5-nts-Win32-vs17-x64.zip",
 		InstallDir: "bin/php",
+		// Variants is the per-major-version PHP catalogue. Each entry
+		// installs into bin/php-{Version}/; the active one is exposed
+		// at bin/php/ via a directory junction, so existing references
+		// in config.json (ExePath: bin/php/php-cgi.exe) keep working.
+		Variants: []VariantSpec{
+			{Version: "7.4", URL: "https://windows.php.net/downloads/releases/archives/php-7.4.33-nts-Win32-vc15-x64.zip", FileName: "php-7.4.33-nts-Win32-vc15-x64.zip", Notes: "PHP 7.4 — needs VC15 (VS2017) runtime."},
+			{Version: "8.0", URL: "https://windows.php.net/downloads/releases/archives/php-8.0.30-nts-Win32-vs16-x64.zip", FileName: "php-8.0.30-nts-Win32-vs16-x64.zip", Notes: "PHP 8.0 — VS16 (VS2019) runtime."},
+			{Version: "8.1", URL: "https://windows.php.net/downloads/releases/archives/php-8.1.31-nts-Win32-vs16-x64.zip", FileName: "php-8.1.31-nts-Win32-vs16-x64.zip", Notes: "PHP 8.1 — VS16 (VS2019) runtime."},
+			{Version: "8.2", URL: "https://windows.php.net/downloads/releases/archives/php-8.2.27-nts-Win32-vs16-x64.zip", FileName: "php-8.2.27-nts-Win32-vs16-x64.zip", Notes: "PHP 8.2 — VS16 (VS2019) runtime."},
+			{Version: "8.3", URL: "https://windows.php.net/downloads/releases/archives/php-8.3.15-nts-Win32-vs16-x64.zip", FileName: "php-8.3.15-nts-Win32-vs16-x64.zip", Notes: "PHP 8.3 — VS16 (VS2019) runtime."},
+			{Version: "8.4", URL: "https://windows.php.net/downloads/releases/php-8.4.1-nts-Win32-vs17-x64.zip", FileName: "php-8.4.1-nts-Win32-vs17-x64.zip", Notes: "PHP 8.4 — VS17 (VS2022) runtime, v14.4+."},
+			{Version: "8.5", URL: "https://downloads.php.net/~windows/releases/php-8.5.5-nts-Win32-vs17-x64.zip", FileName: "php-8.5.5-nts-Win32-vs17-x64.zip", Notes: "PHP 8.5 — VS17 (VS2022) runtime, v14.4+."},
+		},
 		StripTop:   "", // archive is flat
 		Kind:       "zip",
 		CheckFile:  "php-cgi.exe",
@@ -296,19 +357,36 @@ var DownloadCatalog = map[string]DownloadSpec{
 				{`(?m)^;?\s*session\.save_path\s*=.*`, `session.save_path = "` + tmpDir + `"`},
 				{`(?m)^;?\s*cgi\.force_redirect\s*=.*`, `cgi.force_redirect = 0`},
 				{`(?m)^;?\s*cgi\.fix_pathinfo\s*=.*`, `cgi.fix_pathinfo=1`},
+				// CGI: any PHP warning printed before headers becomes
+				// "malformed header from script" and breaks pages
+				// (e.g. phpMyAdmin). Errors still go to log_errors.
+				{`(?m)^;?\s*display_errors\s*=.*`, `display_errors = Off`},
+				{`(?m)^;?\s*display_startup_errors\s*=.*`, `display_startup_errors = Off`},
 			}
 			for _, p := range patches {
 				s = regexp.MustCompile(p.re).ReplaceAllString(s, p.replacement)
 			}
 
-			// Extensions phpMyAdmin needs. We uncomment these by
-			// regex-replacing the leading ";" on each line.
+			// Extensions phpMyAdmin needs. Match only the actual
+			// extension-list lines (`;extension=...`, no space after
+			// the `;`) — NOT the `;   extension=mysqli` example in
+			// the comments block, which would cause a duplicate load
+			// and "Module 'mysqli' is already loaded" warnings that
+			// poison CGI headers.
+			// Default extensions:
+			//   curl/fileinfo/gd/mbstring/openssl/zip — phpMyAdmin essentials
+			//   mysqli/pdo_mysql                       — MariaDB drivers
+			//   pdo_pgsql/pgsql                        — PostgreSQL drivers
+			//   intl                                   — required by Laravel,
+			//                                            CodeIgniter 4, Symfony
+			//   sodium                                 — modern crypto
 			exts := []string{
-				"curl", "fileinfo", "gd", "mbstring", "mysqli",
-				"openssl", "pdo_mysql", "zip",
+				"curl", "fileinfo", "gd", "intl", "mbstring",
+				"mysqli", "openssl", "pdo_mysql", "pdo_pgsql",
+				"pgsql", "sodium", "zip",
 			}
 			for _, e := range exts {
-				re := regexp.MustCompile(`(?m)^;\s*extension\s*=\s*` + e + `\b.*`)
+				re := regexp.MustCompile(`(?m)^;extension\s*=\s*` + e + `\b.*`)
 				s = re.ReplaceAllString(s, "extension="+e)
 			}
 
@@ -316,6 +394,13 @@ var DownloadCatalog = map[string]DownloadSpec{
 				return err
 			}
 			log("  patched php.ini (extension_dir, session.save_path, 8 extensions)")
+
+			// Mirror the bundled v14.44 VC++ runtime DLLs into
+			// bin/php/ right now so the user's first php-cgi.exe
+			// invocation already has the right runtime — instead of
+			// hitting "VCRUNTIME140.dll 14.0 is not compatible"
+			// until the next GoAMPP relaunch.
+			ensurePhpRuntimeDLLs(baseDir, log)
 			return nil
 		},
 	},
@@ -328,13 +413,35 @@ var DownloadCatalog = map[string]DownloadSpec{
 		InstallDir: "bin/mysql",
 		StripTop:   "mariadb-11.4.10-winx64/",
 		Kind:       "zip",
-		CheckFile:  "bin/mysqld.exe",
+		// Sentinel must prove BOTH (a) the zip fully extracted (share/ is
+		// where mysqld looks for error messages and the bootstrap SQL —
+		// no share/, no working server) and (b) PostInstall ran (which
+		// is where mariadb-install-db seeds data/mysql/ with the
+		// privilege tables). Using mysqld.exe alone would silently OK
+		// an install missing install-db, share/, and the system DB —
+		// exactly the state that produces "Table 'mysql.db' doesn't
+		// exist" on every start.
+		CheckFile:  "data/mysql",
 		Notes:      "MariaDB — MySQL-compatible drop-in.",
 		PostInstall: func(installDir string, log func(string)) error {
 			dataDir := filepath.Join(installDir, "data")
 			if _, err := os.Stat(filepath.Join(dataDir, "mysql")); err == nil {
 				log("  data dir already initialized, skipping")
 				return nil
+			}
+			// If a previous broken start left InnoDB files in data/
+			// without the system tables, mariadb-install-db.exe will
+			// refuse to seed (it won't overwrite an existing cluster).
+			// Wipe the dir first — these files are useless without
+			// the privilege tables anyway.
+			if entries, _ := os.ReadDir(dataDir); len(entries) > 0 {
+				log("  wiping stale data/ from earlier broken install")
+				if err := os.RemoveAll(dataDir); err != nil {
+					return fmt.Errorf("wipe data dir: %w", err)
+				}
+				if err := os.MkdirAll(dataDir, 0o755); err != nil {
+					return fmt.Errorf("recreate data dir: %w", err)
+				}
 			}
 			// Try the modern tool name first, fall back to the legacy one.
 			candidates := []string{
@@ -370,8 +477,14 @@ var DownloadCatalog = map[string]DownloadSpec{
 		InstallDir: "bin/pgsql",
 		StripTop:   "pgsql/",
 		Kind:       "zip",
-		CheckFile:  "bin/postgres.exe",
-		Notes:      "EDB binaries — requires VC++ 2015-2022 Redistributable.",
+		// Sentinel proves BOTH the zip extracted AND initdb
+		// completed (data/PG_VERSION is the very last file initdb
+		// creates). bin/postgres.exe alone would silently OK an
+		// install whose data/ initdb wiped after a 0xC0000005
+		// crash, leaving "could not access directory" on every
+		// Start until the user manually intervened.
+		CheckFile:  "data/PG_VERSION",
+		Notes:      "EDB binaries — locale provider forced to builtin to bypass ICU.",
 		PostInstall: func(installDir string, log func(string)) error {
 			dataDir := filepath.Join(installDir, "data")
 			if _, err := os.Stat(filepath.Join(dataDir, "PG_VERSION")); err == nil {
@@ -382,13 +495,58 @@ var DownloadCatalog = map[string]DownloadSpec{
 			if _, err := os.Stat(initExe); err != nil {
 				return fmt.Errorf("initdb.exe not found")
 			}
-			log("  initializing PostgreSQL cluster...")
+
+			// Drop the bundled v14.44 VC++ runtime DLLs next to
+			// postgres.exe before initdb runs. Postgres 18 binaries
+			// from EDB are linked against the same MSVC runtime as
+			// PHP — a downlevel C:\Windows\System32\vcruntime140.dll
+			// makes the bootstrap child process die with
+			// 0xC0000005 (access violation) during
+			// "performing post-bootstrap initialization". Mirroring
+			// the good runtime locally sidesteps the system DLL.
+			//
+			// We do this BEFORE running initdb, since initdb itself
+			// shells out to postgres.exe for the bootstrap.
+			pgBin := filepath.Join(installDir, "bin")
+			runtimeDir := filepath.Dir(filepath.Dir(installDir)) // {base}
+			runtimeSrc := filepath.Join(runtimeDir, "runtime")
+			if _, err := os.Stat(runtimeSrc); err == nil {
+				for _, dll := range []string{"vcruntime140.dll", "vcruntime140_1.dll", "msvcp140.dll"} {
+					_ = copyFile(
+						filepath.Join(runtimeSrc, dll),
+						filepath.Join(pgBin, dll),
+					)
+				}
+				log("  seeded VC++ 14.44 runtime into pgsql/bin/")
+			}
+
+			pwTmp := filepath.Join(os.TempDir(), "goampp-pg-pw.txt")
+			if err := os.WriteFile(pwTmp, []byte("postgres"), 0o600); err != nil {
+				return fmt.Errorf("write pw file: %w", err)
+			}
+			defer os.Remove(pwTmp)
+
+			// --locale-provider=builtin + --builtin-locale=C bypasses
+			// ICU entirely. Postgres 18 defaults the locale provider
+			// to ICU on Windows, which depends on libicu*.dll being
+			// loadable from the postgres child process. Some Windows
+			// configurations refuse to load it (AV / WinSxS issues),
+			// causing the same 0xC0000005 we patched above. The
+			// builtin provider needs no DLL — pure C locale.
+			//
+			// --no-instructions suppresses the "Success. You can now
+			// start the database server using: ..." footer that
+			// trips up our log parsing.
+			log("  initializing PostgreSQL cluster (user=postgres, password=postgres, locale=builtin C, auth=trust)...")
 			cmd := exec.Command(initExe,
 				"-D", dataDir,
 				"-U", "postgres",
+				"--pwfile="+pwTmp,
 				"-E", "UTF8",
 				"-A", "trust",
-				"--locale=C",
+				"--locale-provider=builtin",
+				"--builtin-locale=C",
+				"--no-instructions",
 			)
 			out, err := cmd.CombinedOutput()
 			if err != nil {
@@ -445,16 +603,21 @@ var DownloadCatalog = map[string]DownloadSpec{
 			// Generate a 32-byte random blowfish secret. Base64-encoded
 			// because we're inlining it into a PHP string literal — no
 			// escape worries with alphanumerics + /+.
+			// Go's regexp.ReplaceAll interprets `$` in the replacement
+			// as a capture-group reference (`$1`, `$cfg` → "", etc.),
+			// which silently strips `$cfg` and `$i` and produces an
+			// invalid PHP file ("['blowfish_secret'] = ..."). Use
+			// ReplaceAllLiteral so the replacement is taken verbatim.
 			var secret [24]byte
 			if _, err := cryptorand.Read(secret[:]); err == nil {
 				enc := base64.StdEncoding.EncodeToString(secret[:])
 				reBf := regexp.MustCompile(`(?m)^\$cfg\['blowfish_secret'\]\s*=\s*'[^']*';.*$`)
-				data = reBf.ReplaceAll(data,
+				data = reBf.ReplaceAllLiteral(data,
 					[]byte(`$cfg['blowfish_secret'] = '`+enc+`'; /* auto-generated by GoAMPP */`))
 			}
 
 			reAllow := regexp.MustCompile(`(?m)^\$cfg\['Servers'\]\[\$i\]\['AllowNoPassword'\]\s*=\s*(?:true|false);.*$`)
-			data = reAllow.ReplaceAll(data,
+			data = reAllow.ReplaceAllLiteral(data,
 				[]byte(`$cfg['Servers'][$i]['AllowNoPassword'] = true; /* local dev — empty root password is fine */`))
 
 			log("  patched config.inc.php (blowfish_secret, AllowNoPassword)")
@@ -489,6 +652,11 @@ var DownloadCatalog = map[string]DownloadSpec{
 		Kind:       "zip",
 		CheckFile:  "node.exe",
 		Notes:      "JavaScript runtime — npm and npx are included alongside node.exe.",
+		Variants: []VariantSpec{
+			{Version: "18", URL: "https://nodejs.org/dist/v18.20.5/node-v18.20.5-win-x64.zip", FileName: "node-v18.20.5-win-x64.zip", StripTop: "node-v18.20.5-win-x64/", Notes: "Node 18 LTS (Hydrogen, EOL April 2025)."},
+			{Version: "20", URL: "https://nodejs.org/dist/v20.18.1/node-v20.18.1-win-x64.zip", FileName: "node-v20.18.1-win-x64.zip", StripTop: "node-v20.18.1-win-x64/", Notes: "Node 20 LTS (Iron)."},
+			{Version: "22", URL: "https://nodejs.org/dist/v22.22.2/node-v22.22.2-win-x64.zip", FileName: "node-v22.22.2-win-x64.zip", StripTop: "node-v22.22.2-win-x64/", Notes: "Node 22 LTS (Jod) — current default."},
+		},
 	},
 	"Python": {
 		Version:    "3.13.13 (embeddable)",
@@ -499,6 +667,12 @@ var DownloadCatalog = map[string]DownloadSpec{
 		Kind:       "zip",
 		CheckFile:  "python.exe",
 		Notes:      "Embeddable Python — pip is bootstrapped automatically post-install.",
+		Variants: []VariantSpec{
+			{Version: "3.10", URL: "https://www.python.org/ftp/python/3.10.11/python-3.10.11-embed-amd64.zip", FileName: "python-3.10.11-embed-amd64.zip", Notes: "Python 3.10 (security-only)."},
+			{Version: "3.11", URL: "https://www.python.org/ftp/python/3.11.9/python-3.11.9-embed-amd64.zip", FileName: "python-3.11.9-embed-amd64.zip", Notes: "Python 3.11."},
+			{Version: "3.12", URL: "https://www.python.org/ftp/python/3.12.7/python-3.12.7-embed-amd64.zip", FileName: "python-3.12.7-embed-amd64.zip", Notes: "Python 3.12."},
+			{Version: "3.13", URL: "https://www.python.org/ftp/python/3.13.13/python-3.13.13-embed-amd64.zip", FileName: "python-3.13.13-embed-amd64.zip", Notes: "Python 3.13 — current default."},
+		},
 		PostInstall: func(installDir string, log func(string)) error {
 			// 1. The embeddable distribution ships with `import site`
 			// commented out in python3X._pth, which prevents pip from
@@ -580,25 +754,92 @@ type ProgressFunc func(stage, name string, done, total int64)
 // but has no single progress bar to drive).
 func NopProgress(stage, name string, done, total int64) {}
 
-// DownloadAndInstall is the single entry point called from the UI. It's
-// synchronous — callers should wrap it in a goroutine so the UI thread
-// doesn't block on a 50 MB download. `progress` can be NopProgress if
-// the caller only wants log output.
+// DownloadAndInstall is the legacy entry point — installs the
+// catalog's default version. Callers wanting a specific variant
+// should use DownloadAndInstallVersion directly.
 func DownloadAndInstall(name, baseDir string, log func(string), progress ProgressFunc) error {
+	return DownloadAndInstallVersion(name, "", baseDir, log, progress)
+}
+
+// DownloadAndInstallVersion fetches and installs a specific version
+// of a service. `version` may be the empty string (use the catalog's
+// flat URL — the historical single-version path) or a label that
+// matches a Variants[].Version entry. For multi-version services
+// the install lands in {InstallDir}-{version} (e.g. bin/php-8.4)
+// and the canonical InstallDir (bin/php) is then exposed as a
+// directory junction pointing at the active version.
+//
+// Synchronous — callers should wrap in a goroutine so the UI thread
+// doesn't block on a 50 MB download.
+func DownloadAndInstallVersion(name, version, baseDir string, log func(string), progress ProgressFunc) error {
 	spec, ok := DownloadCatalog[name]
 	if !ok {
 		return fmt.Errorf("no download info registered for %q", name)
 	}
 
+	// Resolve which set of URL/FileName/StripTop/Notes to use.
+	// Empty `version` falls back to the spec's flat fields so
+	// pre-variant services (Apache, MariaDB) behave exactly as before.
+	url := spec.URL
+	fileName := spec.FileName
+	stripTop := spec.StripTop
+	notes := spec.Notes
+	versionLabel := spec.Version
+	if len(spec.Variants) > 0 && version != "" {
+		var v *VariantSpec
+		for i := range spec.Variants {
+			if spec.Variants[i].Version == version {
+				v = &spec.Variants[i]
+				break
+			}
+		}
+		if v == nil {
+			return fmt.Errorf("[%s] version %q not in catalogue", name, version)
+		}
+		url = v.URL
+		fileName = v.FileName
+		stripTop = v.StripTop
+		if v.Notes != "" {
+			notes = v.Notes
+		}
+		versionLabel = v.Version
+	}
+
 	downloadMu.Lock()
 	defer downloadMu.Unlock()
 
-	installDir := filepath.Join(baseDir, filepath.FromSlash(spec.InstallDir))
+	canonicalDir := filepath.Join(baseDir, filepath.FromSlash(spec.InstallDir))
+	installDir := canonicalDir
+	if len(spec.Variants) > 0 && version != "" {
+		installDir = canonicalDir + "-" + version // bin/php-8.4
+	}
 
-	// Quick short-circuit if the check file already exists.
+	// Short-circuit if THIS variant's check file is already there.
+	// The sentinel is checked relative to the variant install dir
+	// so each version gets its own "is installed" decision.
 	if spec.CheckFile != "" {
 		if _, err := os.Stat(filepath.Join(installDir, filepath.FromSlash(spec.CheckFile))); err == nil {
-			log(fmt.Sprintf("[%s] already installed at %s", name, installDir))
+			log(fmt.Sprintf("[%s] %s already installed at %s", name, versionLabel, installDir))
+			// Re-mirror the variant onto the canonical dir even on
+			// the short-circuit path — the user may have switched
+			// versions and bin/<svc>/ still mirrors the old one.
+			if installDir != canonicalDir {
+				if err := pointJunction(canonicalDir, installDir, log); err != nil {
+					return err
+				}
+			}
+			// And re-run PostInstall against canonicalDir. This is
+			// what re-applies the php.ini patches and copies the
+			// bundled vcruntime140.dll v14.44 into bin/php after
+			// robocopy /MIR wiped it (the source variant dir
+			// doesn't ship that DLL — it's our own self-heal). All
+			// PostInstall hooks are idempotent so re-running is
+			// cheap and safe.
+			if spec.PostInstall != nil {
+				if err := spec.PostInstall(canonicalDir, log); err != nil {
+					return fmt.Errorf("post-install: %w", err)
+				}
+			}
 			return nil
 		}
 	}
@@ -608,37 +849,38 @@ func DownloadAndInstall(name, baseDir string, log func(string), progress Progres
 	}
 	progress("starting", name, 0, 0)
 
-	log(fmt.Sprintf("[%s] %s — starting install", name, spec.Version))
-	if spec.Notes != "" {
-		log("  note: " + spec.Notes)
+	log(fmt.Sprintf("[%s] %s — starting install", name, versionLabel))
+	if notes != "" {
+		log("  note: " + notes)
 	}
 
-	// Stage 1: HTTP download to downloads/ (kept around so re-installs
-	// don't re-download — the user can rm -rf downloads/ to force).
+	// Stage 1: HTTP download to downloads/.
 	dlDir := filepath.Join(baseDir, "downloads")
 	if err := os.MkdirAll(dlDir, 0o755); err != nil {
 		progress("idle", name, 0, 0)
 		return fmt.Errorf("create downloads dir: %w", err)
 	}
-	dlPath := filepath.Join(dlDir, spec.FileName)
+	dlPath := filepath.Join(dlDir, fileName)
 	if _, err := os.Stat(dlPath); err != nil {
-		if err := httpDownload(spec.URL, dlPath, log, func(done, total int64) {
+		if err := httpDownload(url, dlPath, log, func(done, total int64) {
 			progress("downloading", name, done, total)
 		}); err != nil {
 			progress("idle", name, 0, 0)
 			return fmt.Errorf("download: %w", err)
 		}
 	} else {
-		log("  using cached download: " + spec.FileName)
-		// Report a "full" download so the progress bar fills up visually
-		// even when we skipped the network fetch.
+		log("  using cached download: " + fileName)
 		if fi, err := os.Stat(dlPath); err == nil {
 			progress("downloading", name, fi.Size(), fi.Size())
 		}
 	}
 
 	// Stage 2: extract or copy into the install directory.
-	if err := os.MkdirAll(installDir, 0o755); err != nil {
+	// ensureInstallDir handles the case where installDir is already
+	// a junction (canonical bin/php pointing at bin/php-8.2) — plain
+	// MkdirAll has been seen to spuriously fail on junctions with
+	// "Cannot create a file when that file already exists".
+	if err := ensureInstallDir(installDir); err != nil {
 		progress("idle", name, 0, 0)
 		return fmt.Errorf("create install dir: %w", err)
 	}
@@ -647,7 +889,7 @@ func DownloadAndInstall(name, baseDir string, log func(string), progress Progres
 	case "zip":
 		log(fmt.Sprintf("  extracting into %s", installDir))
 		progress("extracting", name, 0, 0)
-		if err := extractZip(dlPath, installDir, spec.StripTop, func(done, total int64) {
+		if err := extractZip(dlPath, installDir, stripTop, func(done, total int64) {
 			progress("extracting", name, done, total)
 		}); err != nil {
 			progress("idle", name, 0, 0)
@@ -656,7 +898,7 @@ func DownloadAndInstall(name, baseDir string, log func(string), progress Progres
 	case "file":
 		target := spec.TargetFile
 		if target == "" {
-			target = spec.FileName
+			target = fileName
 		}
 		log(fmt.Sprintf("  copying to %s/%s", installDir, target))
 		if err := copyFile(dlPath, filepath.Join(installDir, target)); err != nil {
@@ -668,10 +910,21 @@ func DownloadAndInstall(name, baseDir string, log func(string), progress Progres
 		return fmt.Errorf("unknown kind: %q", spec.Kind)
 	}
 
-	// Stage 3: run the post-install hook (initdb, config rewrite, etc.)
+	// Stage 2b (multi-version only): repoint the canonical junction at
+	// this freshly-extracted variant. PostInstall and the rest of the
+	// app reference {baseDir}/bin/<service>/ — the junction makes the
+	// active variant transparent.
+	if installDir != canonicalDir {
+		if err := pointJunction(canonicalDir, installDir, log); err != nil {
+			return err
+		}
+	}
+
+	// Stage 3: run the post-install hook against the canonical path
+	// (so config file paths in patches stay version-agnostic).
 	if spec.PostInstall != nil {
 		progress("post-install", name, 0, 0)
-		if err := spec.PostInstall(installDir, log); err != nil {
+		if err := spec.PostInstall(canonicalDir, log); err != nil {
 			progress("idle", name, 0, 0)
 			return fmt.Errorf("post-install: %w", err)
 		}
@@ -679,10 +932,135 @@ func DownloadAndInstall(name, baseDir string, log func(string), progress Progres
 
 	log(fmt.Sprintf("[%s] install complete", name))
 	progress("done", name, 0, 0)
-	// Brief pause at 100% so the user sees the bar full before it resets.
 	time.Sleep(500 * time.Millisecond)
 	progress("idle", name, 0, 0)
 	return nil
+}
+
+// pointJunction makes `canonical` mirror `target` via a robocopy
+// /MIR copy. Earlier versions used a Windows directory junction
+// (mklink /J), which is faster but is intermittently flagged by
+// Defender / antivirus / file-system filters as an "untrusted
+// mount point" — Windows then refuses to traverse the junction
+// from unelevated processes, breaking php-cgi.exe spawn and
+// editor file open. Mirror copies are slower (a couple of seconds
+// per version switch on a normal SSD) but work in every Windows
+// configuration we've seen.
+//
+// Idempotent: if `canonical` already has the same files as
+// `target`, robocopy /MIR /XO is a no-op. If `canonical` is a
+// stale junction left over from a previous build, it gets removed
+// and replaced with a real directory.
+func pointJunction(canonical, target string, log func(string)) error {
+	// If `canonical` is currently a reparse point (junction/symlink
+	// from an older build), drop it BEFORE mirroring — robocopy
+	// would otherwise try to copy through the junction and either
+	// fail with the same "untrusted mount point" error or duplicate
+	// the target's files in a loop.
+	if fi, err := os.Lstat(canonical); err == nil {
+		isReparse := fi.Mode()&(os.ModeSymlink|os.ModeIrregular) != 0
+		if isReparse {
+			if err := os.Remove(canonical); err != nil {
+				return fmt.Errorf("remove old junction: %w", err)
+			}
+			log("  removed legacy junction at " + canonical)
+		} else if fi.IsDir() {
+			// If a previous install left files here from when we
+			// did flat extraction (or the user landed on this code
+			// path mid-migration), it'll be overwritten by robocopy
+			// /MIR — but if the dir is large and entirely unrelated
+			// (different service?), preserve it under -legacy first.
+			// Heuristic: presence of our service's CheckFile means
+			// it's a previous install of the same service, safe to
+			// overwrite. Otherwise preserve.
+			//
+			// We can't see the spec.CheckFile here, so trust the
+			// caller (DownloadAndInstallVersion only calls us with
+			// freshly-extracted variant dirs).
+		}
+	}
+	if err := os.MkdirAll(canonical, 0o755); err != nil {
+		return fmt.Errorf("create canonical dir: %w", err)
+	}
+	// robocopy returns 0/1/2/3 for "no copy needed" / "files copied"
+	// / "extra files in dest" / "files copied + extras" — all are
+	// success. Anything 4+ is a real failure.
+	//   /MIR      = mirror (copy + delete extras)
+	//   /NJH /NJS = no job header / summary
+	//   /NFL /NDL = no file / dir list (quieter log)
+	//   /NP       = no per-file progress
+	//   /R:1 /W:1 = retry once, 1s wait (defaults are 1M retries, 30s)
+	cmd := exec.Command("robocopy", target, canonical,
+		"/MIR", "/NJH", "/NJS", "/NFL", "/NDL", "/NP", "/R:1", "/W:1")
+	cmd.SysProcAttr = &syscall.SysProcAttr{HideWindow: true, CreationFlags: 0x08000000}
+	out, err := cmd.CombinedOutput()
+	if err != nil {
+		// exec.ExitError on success exit codes 1-3 — robocopy uses
+		// these to signal copy progress, not failure. Treat as ok.
+		if exitErr, ok := err.(*exec.ExitError); ok {
+			code := exitErr.ExitCode()
+			if code >= 0 && code < 8 {
+				err = nil
+			}
+		}
+	}
+	if err != nil {
+		return fmt.Errorf("robocopy mirror %s → %s: %v: %s",
+			target, canonical, err, strings.TrimSpace(string(out)))
+	}
+	log(fmt.Sprintf("  active version → %s", filepath.Base(target)))
+	return nil
+}
+
+// samePath compares two filesystem paths after canonicalising case
+// and slash style. Windows is case-insensitive and lets you mix /
+// and \, but a byte-for-byte string compare would say
+// "C:/goampp/bin/php-8.4" != "C:\goampp\bin\php-8.4".
+func samePath(a, b string) bool {
+	return strings.EqualFold(filepath.Clean(a), filepath.Clean(b))
+}
+
+// ensureInstallDir prepares the target directory for extraction. If
+// it's a regular missing path, MkdirAll. If it's already a junction,
+// resolve to the real directory and ensure THAT exists. The plain
+// MkdirAll on a junction has been observed to fail on some Windows
+// configurations with "Cannot create a file when that file already
+// exists" even when the junction target is a healthy directory, so
+// we do the work ourselves.
+func ensureInstallDir(path string) error {
+	if fi, err := os.Lstat(path); err == nil {
+		if fi.Mode()&(os.ModeSymlink|os.ModeIrregular) != 0 {
+			// Junction or symlink — follow it and make sure the
+			// resolved target exists.
+			real, err := filepath.EvalSymlinks(path)
+			if err != nil {
+				return fmt.Errorf("resolve junction %s: %w", path, err)
+			}
+			return os.MkdirAll(real, 0o755)
+		}
+		if fi.IsDir() {
+			return nil
+		}
+		return fmt.Errorf("%s exists but is not a directory", path)
+	}
+	return os.MkdirAll(path, 0o755)
+}
+
+// SetActiveVariant switches a multi-version service to use the given
+// installed variant. If the variant isn't installed yet, it's
+// downloaded first. After the call, {baseDir}/{InstallDir} (e.g.
+// bin/php) is a junction pointing at {InstallDir}-{version}.
+func SetActiveVariant(name, version, baseDir string, log func(string), progress ProgressFunc) error {
+	spec, ok := DownloadCatalog[name]
+	if !ok {
+		return fmt.Errorf("no catalogue entry for %q", name)
+	}
+	if len(spec.Variants) == 0 {
+		return fmt.Errorf("[%s] is not multi-version", name)
+	}
+	// DownloadAndInstallVersion is idempotent: if the variant is
+	// already extracted, it just repoints the junction.
+	return DownloadAndInstallVersion(name, version, baseDir, log, progress)
 }
 
 // httpDownload streams a URL into dest, showing approximate progress in

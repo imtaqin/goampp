@@ -5,9 +5,11 @@ package main
 import (
 	"fmt"
 	"os"
+	"os/exec"
 	"path/filepath"
 	"strconv"
 	"strings"
+	"syscall"
 	"time"
 
 	"github.com/rodrigocfd/windigo/co"
@@ -20,7 +22,12 @@ import (
 // these numbers are what you see on a 100% monitor.
 const (
 	winW = 960
-	winH = 760
+	// Compact layout: top strip (36) + 3 rows of 84-tall cards
+	// (276) + a bit of bottom slack ≈ 340 content area. Section
+	// headers were dropped earlier so we don't need the extra
+	// height. Total window 720 keeps the log panel at a useful
+	// height without dead space between cards and progress bar.
+	winH = 720
 
 	// Sidebar (left column of nav buttons).
 	sideX = 10
@@ -29,25 +36,24 @@ const (
 	sideH = 38
 	sideGap = 4
 
-	// Content area (pages live here, stacked on top of each other).
-	// Bumped from 332 → 452 to fit a 4×3 grid of service cards with
-	// per-card action buttons (Start/Stop/Restart/Conf).
+	// Content area — sized to the actual grid footprint instead
+	// of stretched to fill.
 	contentX = 130
 	contentY = 48
 	contentW = 820
-	contentH = 452
+	contentH = 340
 
-	// Download progress strip — always present above the log panel.
-	progY = 508
-	progH = 20
+	// Download progress strip — sits 8px below the content area.
+	progY = 396
+	progH = 18
 
-	// Log panel across the bottom. logY needs enough headroom above
-	// it for the "Logs" label (logY-18); progBar bottom is at
-	// progY+progH = 528, so logY-18 must be >= 530 → logY >= 548.
+	// Log panel — pulled up so there's no big empty band between
+	// the cards and the log. Header label sits at logY-18 (440-18
+	// = 422) which clears progBar bottom (396+18 = 414).
 	logX = 10
-	logY = 552
+	logY = 440
 	logW = 940
-	logH = 170
+	logH = 230
 )
 
 // ----- Page container tracking ------------------------------------------
@@ -92,7 +98,71 @@ var domainExtensions = []string{
 //
 // Nginx, Postgres, Redis, Adminer stay manual — boot them from the
 // per-row Start button if you need them.
-var essentialServices = []string{"Apache", "MySQL", "phpMyAdmin"}
+var essentialServices = []string{"Apache", "PHP-FPM", "MySQL", "phpMyAdmin"}
+
+// ensureStackEssentials walks the essential-services list and:
+//   1. downloads + installs anything missing,
+//   2. launches services whose ServiceConf.Enabled is true.
+//
+// Services with Enabled=false (e.g. PHP-FPM) are install-only —
+// Apache spawns php-cgi.exe per-request via mod_cgi, so a long-
+// running FPM daemon would just chew a port and bring nothing.
+// Install-only ensures the binary lands at bin/php/php-cgi.exe so
+// Apache's Action handler can actually find it; we just skip the
+// .Start() call.
+//
+// Synchronous — call from a goroutine. Called from both Start Stack
+// and Restart Stack so they share the same install/launch policy.
+func ensureStackEssentials() {
+	for _, name := range essentialServicesActive() {
+		ms := app.findService(name)
+		if ms == nil {
+			continue
+		}
+		// Step 1: ensure the binary is on disk. The tightened
+		// CheckFile sentinels make this catch partial installs
+		// too (e.g. Apache with no conf/, MySQL with no system
+		// tables) — DownloadAndInstall wipes + re-extracts in
+		// that case.
+		if _, ok := DownloadCatalog[name]; ok && !IsInstalled(name, app.baseDir) {
+			// Use the user's chosen variant (e.g. PHP 8.2) instead of
+			// the catalogue default — same reasoning as startService.
+			if err := DownloadAndInstallVersion(name, ms.Conf.ActiveVersion, app.baseDir, app.appendLog, uiDownloadProgress); err != nil {
+				app.appendLog(fmt.Sprintf("[%s] install failed: %v", name, err))
+				continue
+			}
+		}
+		// Step 2: launch only if it's a true daemon service.
+		if !ms.Conf.Enabled {
+			continue
+		}
+		for i, m := range app.services {
+			if m == ms {
+				startService(i)
+				break
+			}
+		}
+		time.Sleep(400 * time.Millisecond)
+	}
+	app.wnd.UiThread(refreshServiceList)
+}
+
+// essentialServicesActive returns essentialServices with the web
+// server slot replaced by whichever server the user picked in the
+// Active Web Server dropdown. So if they switched to Nginx, "Start
+// Stack" boots Nginx instead of Apache.
+func essentialServicesActive() []string {
+	out := make([]string, 0, len(essentialServices))
+	web := activeWebServer()
+	for _, name := range essentialServices {
+		if name == "Apache" || name == "Nginx" {
+			out = append(out, web)
+			continue
+		}
+		out = append(out, name)
+	}
+	return out
+}
 
 var (
 	pages      []*page
@@ -313,16 +383,26 @@ func newPageContainer(wnd *ui.Main) *ui.Control {
 // (with erase=true) makes Windows send WM_ERASEBKGND first, which
 // fills the area with the class brush (gray), wiping the leftover.
 func showPage(key string) {
+	// Hide every non-active page FIRST. Doing this before showing the
+	// new page means the (now-active) page paints onto an already-cleared
+	// region instead of on top of the prior page's stale pixels.
+	for _, p := range pages {
+		if p.key != key {
+			p.container.Hwnd().ShowWindow(co.SW_HIDE)
+		}
+	}
 	for _, p := range pages {
 		if p.key == key {
 			h := p.container.Hwnd()
 			h.ShowWindow(co.SW_SHOW)
-			// Erase any stale pixels from a previously-active page
-			// before the new page's children paint themselves.
-			_ = h.InvalidateRect(nil, true)
-			h.UpdateWindow()
-		} else {
-			p.container.Hwnd().ShowWindow(co.SW_HIDE)
+			// Force a full erase + repaint of the page AND all of its
+			// children. Without RDW_ALLCHILDREN, transparent / non-
+			// opaque child controls (Statics with CTLCOLORSTATIC) keep
+			// whatever pixels were under them when the prior tab was
+			// last drawn — which is exactly the "old tab bleeding
+			// through behind the cards" symptom.
+			_ = h.RedrawWindow(nil, 0,
+				co.RDW_INVALIDATE|co.RDW_ERASE|co.RDW_ALLCHILDREN|co.RDW_UPDATENOW)
 		}
 	}
 	activePage = key
@@ -337,87 +417,228 @@ func showPage(key string) {
 // refreshServiceList can update text + button labels in place
 // without rebuilding the whole grid.
 type serviceCard struct {
-	srcIdx     int          // index into app.services
-	iconStatic *ui.Static   // SS_ICON, set via STM_SETICON
+	srcIdx     int        // index into app.services
+	iconStatic *ui.Static // SS_ICON, set via STM_SETICON
 	nameStatic *ui.Static
 	statusLbl  *ui.Static
 	versionLbl *ui.Static
-	btnStart   *ui.Button   // toggles label between "Start" and "Stop"
-	btnStop    *ui.Button
+	// rect is the card's bounding box in page-client coords. Used by
+	// the right-click context-menu hit test to identify which card
+	// the user clicked when picking a version.
+	rect win.RECT
+
+	// One toggle button replaces the old Start/Stop pair: its label
+	// flips between "▶ Start" and "■ Stop" and its colour scheme
+	// flips between green (action: start) and red (action: stop)
+	// depending on Service.Running(). Restart and Conf stay split
+	// out — they're always-applicable verbs that don't toggle.
+	btnToggle  *ui.Button
 	btnRestart *ui.Button
 	btnConf    *ui.Button
+	// btnVer is a small "▾" button that opens the version-switch
+	// menu, but ONLY shown for multi-version services (PHP, Node,
+	// Python). Discoverability: right-click works too, but a
+	// visible affordance is the obvious place for users to click.
+	btnVer *ui.Button
+
+	// statusDot is a small coloured square painted as a Static with
+	// owner-draw — green = running, red = stopped, grey = not
+	// installed. Lives at the top-left of the card next to the icon.
+	statusDot *ui.Static
+}
+
+// versionMenuBase is the starting menu-item ID for the right-click
+// context menu's variant entries. We keep it well above any other
+// command range used in the app (sidebar/footer buttons + tray
+// items) so there's no chance of collision when TrackPopupMenu's
+// returned ID is decoded back into a service+version pair.
+const versionMenuBase = 6000
+
+// showServiceContextMenu hit-tests the cursor position against
+// every service card and, if the click landed on a multi-version
+// service, pops a "Switch to version X" menu.
+func showServiceContextMenu(parent *ui.Control, screenPt win.POINT) {
+	pt := screenPt
+	_ = parent.Hwnd().ScreenToClientPt(&pt)
+
+	var hit *serviceCard
+	for _, c := range serviceCards {
+		if pt.X >= c.rect.Left && pt.X < c.rect.Right &&
+			pt.Y >= c.rect.Top && pt.Y < c.rect.Bottom {
+			hit = c
+			break
+		}
+	}
+	if hit == nil {
+		return
+	}
+	showVersionMenuForCard(hit, screenPt)
+}
+
+// showVersionMenuForCard is the shared popup logic used by both the
+// right-click context handler and the visible "▾" button on each
+// multi-version card. screenPt is where the menu pops up.
+func showVersionMenuForCard(hit *serviceCard, screenPt win.POINT) {
+	ms := app.services[hit.srcIdx]
+	spec, ok := DownloadCatalog[ms.Conf.Name]
+	if !ok || len(spec.Variants) == 0 {
+		return
+	}
+
+	hMenu, err := win.CreatePopupMenu()
+	if err != nil {
+		return
+	}
+	defer hMenu.DestroyMenu()
+
+	appendMenuItem(hMenu, co.MF_STRING|co.MF_DISABLED, 0,
+		fmt.Sprintf("Switch %s version", ms.Conf.Name))
+	appendMenuItem(hMenu, co.MF_SEPARATOR, 0, "")
+
+	current := ms.Conf.ActiveVersion
+	for i, v := range spec.Variants {
+		flags := co.MF_STRING
+		// Mark the active variant with a check.
+		if v.Version == current ||
+			(current == "" && strings.HasPrefix(spec.Version, v.Version)) {
+			flags |= co.MF_CHECKED
+		}
+		appendMenuItem(hMenu, flags, uintptr(versionMenuBase+i), v.Version)
+	}
+
+	// TrackPopupMenu requires foreground for the menu to stay alive
+	// past the click. Returning the chosen ID synchronously via
+	// TPM_RETURNCMD avoids needing a separate WM_COMMAND handler.
+	app.wnd.Hwnd().SetForegroundWindow()
+	cmd, _ := hMenu.TrackPopupMenu(
+		co.TPM_LEFTBUTTON|co.TPM_RIGHTBUTTON|co.TPM_RETURNCMD,
+		int(screenPt.X), int(screenPt.Y), app.wnd.Hwnd())
+	_ = app.wnd.Hwnd().PostMessage(co.WM_NULL, 0, 0)
+	if cmd <= 0 {
+		return
+	}
+
+	idx := cmd - versionMenuBase
+	if idx < 0 || idx >= len(spec.Variants) {
+		return
+	}
+	chosen := spec.Variants[idx].Version
+	serviceName := ms.Conf.Name
+	srcIdx := hit.srcIdx
+
+	// Stop the service first if it's running — switching versions
+	// while the binary is in use would fail to delete/repoint the
+	// junction on Windows (open file handles).
+	if ms.Service != nil && ms.Service.Running() {
+		app.appendLog(fmt.Sprintf("[%s] stopping before version switch", serviceName))
+		_ = ms.Service.Stop()
+	}
+
+	go func() {
+		err := SetActiveVariant(serviceName, chosen, app.baseDir, app.appendLog, uiDownloadProgress)
+		if err != nil {
+			app.appendLog(fmt.Sprintf("[%s] switch %s failed: %v", serviceName, chosen, err))
+			return
+		}
+		// Persist the choice so the version sticks across restarts.
+		if app.cfg != nil && srcIdx < len(app.cfg.Services) {
+			app.cfg.Services[srcIdx].ActiveVersion = chosen
+			_ = SaveConfig(app.baseDir, app.cfg)
+		}
+		app.appendLog(fmt.Sprintf("[%s] switched to %s", serviceName, chosen))
+		app.wnd.UiThread(refreshServiceList)
+	}()
+}
+
+// activeWebServer reads the user's selected web server from
+// app.cfg.Settings, defaulting to "Apache" when the setting is
+// absent (older configs or fresh installs). Returned in canonical
+// case so callers can compare against ServiceConf.Name directly.
+func activeWebServer() string {
+	if app.cfg != nil && app.cfg.Settings.ActiveWebServer != "" {
+		return app.cfg.Settings.ActiveWebServer
+	}
+	return "Apache"
+}
+
+// isWebKindCard reports whether a card belongs to the web-server
+// group — used to dim the inactive web server when the user picks
+// the other one.
+func isWebKindCard(c *serviceCard) bool {
+	return groupForKind(app.services[c.srcIdx].Conf.Kind) == groupWeb
 }
 
 // serviceCards is the live grid. One entry per app.services entry.
 // Built once at WM_CREATE; updated by refreshServiceList.
 var serviceCards []*serviceCard
 
-// Per-card geometry. Cards are 199 wide × 110 tall, packed in a
-// 4×3 grid below the page title. The math: contentW (820) - 16
-// padding = 804; 4 columns + 3 gaps × 8 = 24; (804-24)/4 = 195.
+// Per-card geometry. Simplified to 195×84 — the Restart button
+// went away (Start/Stop toggle covers it) and the version row was
+// merged into the name line, so we don't need the extra height.
 const (
 	cardW   = 195
-	cardH   = 110
+	cardH   = 84
 	cardGap = 8
 )
 
-// buildServicesPage builds the page chrome (bottom Start Stack
-// button row) and creates 12 service-card widget groups, one per
-// entry in app.services. Card text values are set later by
+// webServerPicker is the ComboBox at the top of the Services page
+// that selects which web server is "active" — Apache or Nginx. The
+// inactive one's card is dimmed and its toggle button disabled, so
+// users don't accidentally start two HTTP servers competing for
+// :80. Persisted to config.json on change.
+var webServerPicker *ui.ComboBox
+
+// buildServicesPage builds the page chrome (web-server picker at
+// top, category section headers, card grid, bottom Start Stack
+// button row) and creates one service-card widget group per entry
+// in app.services. Card text values are set later by
 // refreshServiceList — at build time we just create the controls.
 func buildServicesPage(parent *ui.Control) {
-	// Create one card per service in category order so the grid
-	// reads top-to-bottom by category.
-	categoryOrder := []int32{groupWeb, groupLanguage, groupDatabase, groupTool}
-	pos := 0
-	gridX := 10
-	gridY := 12
-	for _, wantGroup := range categoryOrder {
-		for srcIdx, ms := range app.services {
-			if groupForKind(ms.Conf.Kind) != wantGroup {
-				continue
-			}
-			col := pos % 4
-			row := pos / 4
-			x := gridX + col*(cardW+cardGap)
-			y := gridY + row*(cardH+cardGap)
-			card := buildServiceCard(parent, x, y, srcIdx, ms)
-			serviceCards = append(serviceCards, card)
-			pos++
-		}
-	}
+	// Right-click anywhere on the services page → version picker
+	// for the card under the cursor (only fires for services that
+	// have Variants; everything else is a no-op so users don't get
+	// an empty menu).
+	parent.On().WmContextMenu(func(p ui.WmContextMenu) {
+		showServiceContextMenu(parent, p.CursorPos())
+	})
 
-	// Bottom action area: just Start Stack now that per-card
-	// buttons cover the per-service actions.
-	btnY := gridY + 3*(cardH+cardGap) + 8
-	bx := 10
-	addBtn := func(label string, w int, scheme ColorScheme, onClick func()) {
+	// ----- Top strip: Active Web Server picker --------------------
+	// Single inline row at the top — no big label, just a short
+	// "Web:" prefix and the dropdown. Keeps the chrome out of the
+	// way of the actual service grid.
+	ui.NewStatic(parent, ui.OptsStatic().
+		Text("Web:").
+		Position(ui.Dpi(10, 8)).
+		Size(ui.Dpi(28, 16)))
+
+	webServerPicker = ui.NewComboBox(parent, ui.OptsComboBox().
+		Position(ui.Dpi(40, 6)).
+		Width(ui.DpiX(110)).
+		Texts("Apache", "Nginx"))
+	// Pre-select whichever the config says is active.
+	if activeWebServer() == "Nginx" {
+		webServerPicker.SelectIndex(1)
+	} else {
+		webServerPicker.SelectIndex(0)
+	}
+	// Stack action buttons live on the same top row, immediately
+	// after the Web Server picker — this is what the user sees at a
+	// glance, no scrolling/looking-down required.
+	bx := 160
+	btnY := 4
+	addStackBtn := func(label string, w int, scheme ColorScheme, onClick func()) {
 		b := newColoredButton(parent, ui.OptsButton().
 			Text(label).
 			Position(ui.Dpi(bx, btnY)).
-			Width(ui.DpiX(w)).Height(ui.DpiY(30)),
+			Width(ui.DpiX(w)).Height(ui.DpiY(26)),
 			scheme)
 		b.On().BnClicked(onClick)
-		bx += w + 8
+		bx += w + 6
 	}
-	addBtn("Start Stack", 130, SchemeSuccess, func() {
-		go func() {
-			for _, name := range essentialServices {
-				ms := app.findService(name)
-				if ms == nil {
-					continue
-				}
-				for i, m := range app.services {
-					if m == ms {
-						startService(i)
-						break
-					}
-				}
-				time.Sleep(400 * time.Millisecond)
-			}
-		}()
+	addStackBtn("Start Stack", 100, SchemeSuccess, func() {
+		go ensureStackEssentials()
 	})
-	addBtn("Stop All", 100, SchemeDanger, func() {
+	addStackBtn("Stop All", 80, SchemeDanger, func() {
 		go func() {
 			for _, ms := range app.services {
 				if ms.Service != nil {
@@ -426,7 +647,7 @@ func buildServicesPage(parent *ui.Control) {
 			}
 		}()
 	})
-	addBtn("Restart Stack", 130, SchemeWarning, func() {
+	addStackBtn("Restart", 80, SchemeWarning, func() {
 		go func() {
 			app.appendLog("restart stack: stopping all services...")
 			for _, ms := range app.services {
@@ -437,35 +658,92 @@ func buildServicesPage(parent *ui.Control) {
 			killZombieChildren(app.baseDir)
 			time.Sleep(1 * time.Second)
 			app.appendLog("restart stack: starting essentials...")
-			for _, name := range essentialServices {
-				ms := app.findService(name)
-				if ms == nil {
-					continue
-				}
-				for i, m := range app.services {
-					if m == ms {
-						startService(i)
-						break
-					}
-				}
-				time.Sleep(400 * time.Millisecond)
-			}
+			ensureStackEssentials()
 			app.appendLog("restart stack: done")
 		}()
 	})
+
+	webServerPicker.On().CbnSelChange(func() {
+		choice := "Apache"
+		if webServerPicker.SelectedIndex() == 1 {
+			choice = "Nginx"
+		}
+		if app.cfg != nil {
+			app.cfg.Settings.ActiveWebServer = choice
+			_ = SaveConfig(app.baseDir, app.cfg)
+		}
+		// Stop the now-inactive web server if it's running, so
+		// switching is safe. Async to avoid blocking the UI thread.
+		go func(chosen string) {
+			for _, ms := range app.services {
+				if groupForKind(ms.Conf.Kind) != groupWeb {
+					continue
+				}
+				if ms.Conf.Name == chosen {
+					continue
+				}
+				if ms.Service != nil && ms.Service.Running() {
+					app.appendLog(fmt.Sprintf("[%s] stopped — switching active web server to %s", ms.Conf.Name, chosen))
+					_ = ms.Service.Stop()
+				}
+			}
+			app.wnd.UiThread(refreshServiceList)
+		}(choice)
+		app.appendLog("active web server: " + choice)
+		refreshServiceList()
+	})
+
+	// ----- Card grid (no section headers — group order is enough) ----
+	// Cards flow left-to-right, top-to-bottom in category order. The
+	// adjacency itself groups them visually; an explicit header row
+	// per category just adds noise when the cards are already only
+	// 84px tall and the icons make the type obvious.
+	categoryOrder := []int32{groupWeb, groupDatabase, groupLanguage, groupTool}
+	gridX := 10
+	y := 40 // below the top action row (web picker + Start Stack/Stop/Restart)
+	pos := 0
+	for _, wantGroup := range categoryOrder {
+		for srcIdx, ms := range app.services {
+			if groupForKind(ms.Conf.Kind) != wantGroup {
+				continue
+			}
+			col := pos % 4
+			row := pos / 4
+			x := gridX + col*(cardW+cardGap)
+			cy := y + row*(cardH+cardGap)
+			card := buildServiceCard(parent, x, cy, srcIdx, ms)
+			serviceCards = append(serviceCards, card)
+			pos++
+		}
+	}
+	_ = pos
+	// (Bottom action buttons moved to the top row alongside the
+	// Active Web Server picker — see addStackBtn above.)
 }
 
 // buildServiceCard creates the widgets for one service tile at the
 // given top-left coordinates. Layout:
 //
-//   ┌────────────────────────────────────────┐
-//   │ [icon]  Service Name                    │  (icon 32×32 + name)
-//   │         Status                          │
-//   │         Version                         │
-//   │ [Start] [Stop] [Restart] [Conf]         │  (4 buttons)
-//   └────────────────────────────────────────┘
+//   ┌────────────────────────────────────────────┐
+//   │ [icon] [●] Service Name                     │  (icon + status dot + name)
+//   │            Status                           │
+//   │            Version                          │
+//   │ [Start/Stop] [Restart] [Conf]               │  (3 buttons)
+//   └────────────────────────────────────────────┘
+//
+// The Start/Stop button is a single toggle whose label and colour
+// flip based on Service.Running() — green "▶ Start" when stopped,
+// red "■ Stop" when running. This is what the user asked for: one
+// button so the running indicator is unambiguous (green = action
+// available to start; red = action available to stop).
 func buildServiceCard(parent *ui.Control, x, y, srcIdx int, ms *ManagedService) *serviceCard {
-	c := &serviceCard{srcIdx: srcIdx}
+	c := &serviceCard{
+		srcIdx: srcIdx,
+		rect: win.RECT{
+			Left: int32(x), Top: int32(y),
+			Right: int32(x + cardW), Bottom: int32(y + cardH),
+		},
+	}
 
 	// Background border — a Static styled SS_ETCHEDFRAME draws a
 	// thin sunken outline so the cards visually separate from the
@@ -486,53 +764,69 @@ func buildServiceCard(parent *ui.Control, x, y, srcIdx int, ms *ManagedService) 
 		Size(ui.Dpi(32, 32)).
 		CtrlStyle(co.SS_ICON|co.SS_REALSIZECONTROL))
 
-	// Name — bold-ish (we don't change font, but the position is
-	// the dominant text on the card so it reads as the title).
+	// Status dot — sits left of the name. Glyph swaps reflect state
+	// (●/○/·); colour comes from the global static text rule.
+	c.statusDot = ui.NewStatic(parent, ui.OptsStatic().
+		Text("●").
+		Position(ui.Dpi(x+44, y+10)).
+		Size(ui.Dpi(12, 14)))
+
+	// Name — the dominant text on the card.
 	c.nameStatic = ui.NewStatic(parent, ui.OptsStatic().
 		Text(ms.Conf.Name).
-		Position(ui.Dpi(x+48, y+8)).
-		Size(ui.Dpi(cardW-56, 16)))
+		Position(ui.Dpi(x+58, y+10)).
+		Size(ui.Dpi(cardW-66, 16)))
 
+	// Status — single short line; merges port info, no separate
+	// version row (we tuck the version into the name on refresh).
 	c.statusLbl = ui.NewStatic(parent, ui.OptsStatic().
 		Text("...").
-		Position(ui.Dpi(x+48, y+24)).
+		Position(ui.Dpi(x+48, y+28)).
 		Size(ui.Dpi(cardW-56, 14)))
 
+	// versionLbl is unused on the simplified card but kept on the
+	// struct so refreshServiceList doesn't need a separate code
+	// path for old vs new layout. Hidden by setting empty text +
+	// zero-height position (off the visible area).
 	c.versionLbl = ui.NewStatic(parent, ui.OptsStatic().
 		Text("").
-		Position(ui.Dpi(x+48, y+40)).
-		Size(ui.Dpi(cardW-56, 14)))
+		Position(ui.Dpi(x+48, y+cardH)).
+		Size(ui.Dpi(1, 1)))
 
-	// Button row at the bottom of the card. 4 buttons of 42×22
-	// each + 3×4 gaps + 8 padding = 192. Card is 195 wide so
-	// they just fit.
-	btnRowY := y + cardH - 30
-	idx := srcIdx // capture for closures
+	// Button row — just two buttons now: Start/Stop toggle and
+	// Conf. Restart is redundant with Stop+Start and was clutter.
+	btnRowY := y + cardH - 28
+	idx := srcIdx
 
-	c.btnStart = newColoredButton(parent, ui.OptsButton().
-		Text("Start").
+	c.btnToggle = newColoredButton(parent, ui.OptsButton().
+		Text("▶ Start").
 		Position(ui.Dpi(x+8, btnRowY)).
-		Width(ui.DpiX(42)).Height(ui.DpiY(22)),
+		Width(ui.DpiX(96)).Height(ui.DpiY(22)),
 		SchemeSuccess)
-	c.btnStart.On().BnClicked(func() {
+	c.btnToggle.On().BnClicked(func() {
+		ms := app.services[idx]
+		if groupForKind(ms.Conf.Kind) == groupWeb && ms.Conf.Name != activeWebServer() {
+			app.appendLog(fmt.Sprintf(
+				"[%s] not the active web server — set Active Web Server to %s first",
+				ms.Conf.Name, ms.Conf.Name))
+			return
+		}
+		if s := ms.Service; s != nil && s.Running() {
+			_ = s.Stop()
+			return
+		}
 		startService(idx)
 	})
 
-	c.btnStop = newColoredButton(parent, ui.OptsButton().
-		Text("Stop").
-		Position(ui.Dpi(x+54, btnRowY)).
-		Width(ui.DpiX(42)).Height(ui.DpiY(22)),
-		SchemeDanger)
-	c.btnStop.On().BnClicked(func() {
-		if s := app.services[idx].Service; s != nil {
-			_ = s.Stop()
-		}
-	})
-
+	// btnRestart kept on the struct (refreshServiceList still
+	// references it on legacy cards) but rendered off-card so the
+	// simplified layout doesn't show it. Setting size 0×0 + position
+	// outside the card is the cheapest way to "remove" without
+	// rippling through every refresh path.
 	c.btnRestart = newColoredButton(parent, ui.OptsButton().
-		Text("Rstrt").
-		Position(ui.Dpi(x+100, btnRowY)).
-		Width(ui.DpiX(42)).Height(ui.DpiY(22)),
+		Text("").
+		Position(ui.Dpi(x+cardW+100, y+cardH+100)).
+		Width(ui.DpiX(1)).Height(ui.DpiY(1)),
 		SchemeWarning)
 	c.btnRestart.On().BnClicked(func() {
 		s := app.services[idx].Service
@@ -548,11 +842,52 @@ func buildServiceCard(parent *ui.Control, x, y, srcIdx int, ms *ManagedService) 
 		}(s)
 	})
 
-	c.btnConf = newColoredButton(parent, ui.OptsButton().
-		Text("Conf").
-		Position(ui.Dpi(x+146, btnRowY)).
-		Width(ui.DpiX(42)).Height(ui.DpiY(22)),
-		SchemePrimary)
+	// Layout split depending on whether this service has multiple
+	// versions in the catalogue. Multi-version cards get a visible
+	// "Version ▾" button taking the place of width on the right.
+	hasVariants := false
+	if spec, ok := DownloadCatalog[ms.Conf.Name]; ok && len(spec.Variants) > 0 {
+		hasVariants = true
+	}
+
+	if hasVariants {
+		// 3 buttons: toggle (74) + Conf (44) + Version▾ (54) +
+		// 3×4 gaps + 8 padding = 192 → fits the 195-wide card.
+		// Resize the toggle button (originally created at width 96)
+		// down to 74 so we have room for the Ver button on the right.
+		px, py := ui.Dpi(x+8, btnRowY)
+		c.btnToggle.Hwnd().SetWindowPos(win.HWND(0),
+			win.POINT{X: int32(px), Y: int32(py)},
+			win.SIZE{Cx: int32(ui.DpiX(74)), Cy: int32(ui.DpiY(22))},
+			co.SWP_NOZORDER)
+		c.btnConf = newColoredButton(parent, ui.OptsButton().
+			Text("Conf").
+			Position(ui.Dpi(x+86, btnRowY)).
+			Width(ui.DpiX(44)).Height(ui.DpiY(22)),
+			SchemePrimary)
+		card := c
+		c.btnVer = newColoredButton(parent, ui.OptsButton().
+			Text("Ver ▾").
+			Position(ui.Dpi(x+134, btnRowY)).
+			Width(ui.DpiX(54)).Height(ui.DpiY(22)),
+			SchemeWarning)
+		c.btnVer.On().BnClicked(func() {
+			rc, err := card.btnVer.Hwnd().GetWindowRect()
+			if err != nil {
+				return
+			}
+			pt := win.POINT{X: rc.Left, Y: rc.Bottom}
+			showVersionMenuForCard(card, pt)
+		})
+	} else {
+		// Single-version services keep the simpler 2-button layout
+		// (toggle 96 + Conf 80 + gaps + padding ~= 192).
+		c.btnConf = newColoredButton(parent, ui.OptsButton().
+			Text("Conf").
+			Position(ui.Dpi(x+108, btnRowY)).
+			Width(ui.DpiX(80)).Height(ui.DpiY(22)),
+			SchemePrimary)
+	}
 	c.btnConf.On().BnClicked(func() {
 		ms := app.services[idx]
 		if ms.Conf.ConfigFile == "" {
@@ -580,33 +915,96 @@ func refreshServiceList() {
 	if len(serviceCards) == 0 {
 		return
 	}
+	active := activeWebServer()
 	for _, c := range serviceCards {
 		ms := app.services[c.srcIdx]
-		// Status text + colour-ish hint via the literal label.
+		running := ms.Service != nil && ms.Service.Running()
+		installed := IsInstalled(ms.Conf.Name, app.baseDir) || ms.Service == nil
+
+		// Status text — short, no leading dot (we have the dot widget
+		// for that).
 		status := "Stopped"
 		if !ms.Conf.Enabled {
 			status = "Disabled"
 		}
 		if ms.Service == nil {
 			if IsInstalled(ms.Conf.Name, app.baseDir) {
-				status = "(tool — installed)"
+				status = "Installed (tool)"
 			} else {
-				status = "(not installed)"
+				status = "Not installed"
 			}
-		} else if ms.Service.Running() {
-			status = "● Running  pid " + fmt.Sprint(ms.Service.PID())
+		} else if running {
+			status = "Running  pid " + fmt.Sprint(ms.Service.PID())
 		}
-		// Append the port to status when relevant — saves a row.
 		if ms.Conf.Port > 0 {
 			status += "  :" + fmt.Sprint(ms.Conf.Port)
 		}
+		// Web server cards that aren't the active choice get a
+		// clear hint so the user knows why their toggle is muted.
+		if isWebKindCard(c) && ms.Conf.Name != active {
+			status = "Inactive — pick " + ms.Conf.Name + " up top"
+		}
 		c.statusLbl.Hwnd().SetWindowText(status)
 
-		version := ""
-		if spec, ok := DownloadCatalog[ms.Conf.Name]; ok {
-			version = spec.Version
+		// Status dot — green running, red stopped, grey not
+		// installed / inactive web server. The actual colour comes
+		// from CTLCOLORSTATIC, which we don't intercept per-widget,
+		// so for now we use unicode glyph swaps as a colour proxy
+		// that survives without owner-draw plumbing:
+		//   ●  filled    — running (or pickable)
+		//   ○  hollow    — stopped / not running
+		//   ·  small dot — inactive / not installed
+		dot := "○"
+		switch {
+		case isWebKindCard(c) && ms.Conf.Name != active:
+			dot = "·"
+		case !installed:
+			dot = "·"
+		case running:
+			dot = "●"
 		}
-		c.versionLbl.Hwnd().SetWindowText(version)
+		c.statusDot.Hwnd().SetWindowText(dot)
+
+		// Toggle button — label + scheme flip based on running state.
+		// Inactive web server gets greyed out (Start label, but no
+		// click effect since the handler refuses).
+		switch {
+		case isWebKindCard(c) && ms.Conf.Name != active:
+			c.btnToggle.Hwnd().SetWindowText("▶ Start")
+			c.btnToggle.Hwnd().EnableWindow(false)
+		case running:
+			c.btnToggle.Hwnd().SetWindowText("■ Stop")
+			c.btnToggle.Hwnd().EnableWindow(true)
+		default:
+			c.btnToggle.Hwnd().SetWindowText("▶ Start")
+			c.btnToggle.Hwnd().EnableWindow(true)
+		}
+
+		// Merge the version into the name line so the simplified
+		// card doesn't need a separate version row. Multi-version
+		// services show the active variant from config; otherwise
+		// fall back to the catalogue's flat Version label.
+		nameLine := ms.Conf.Name
+		if spec, ok := DownloadCatalog[ms.Conf.Name]; ok {
+			short := spec.Version
+			if len(spec.Variants) > 0 {
+				active := ""
+				for _, v := range spec.Variants {
+					if v.Version == short ||
+						strings.HasPrefix(short, v.Version) {
+						active = v.Version
+					}
+				}
+				if active != "" {
+					short = active
+				}
+			}
+			if short != "" {
+				nameLine = ms.Conf.Name + "  " + short
+			}
+		}
+		c.nameStatic.Hwnd().SetWindowText(nameLine)
+		c.versionLbl.Hwnd().SetWindowText("")
 
 		// Drop the icon onto the SS_ICON Static. Done via the
 		// per-name HICON map populated by installServiceIcons.
@@ -992,61 +1390,95 @@ func refreshVhostList() {
 // buildSettingsPage shows an overview of the runtime paths plus a small
 // "dashboard" strip with global shortcuts.
 func buildSettingsPage(parent *ui.Control) {
-	y := 14
+	y := 10
+	section := func(title string) {
+		ui.NewStatic(parent, ui.OptsStatic().
+			Text(title).
+			Position(ui.Dpi(10, y)).
+			Size(ui.Dpi(contentW-20, 16)))
+		// Thin separator line under the section header.
+		ui.NewStatic(parent, ui.OptsStatic().
+			Text("").
+			Position(ui.Dpi(10, y+18)).
+			Size(ui.Dpi(contentW-20, 1)).
+			CtrlStyle(co.SS_ETCHEDHORZ))
+		y += 26
+	}
 	row := func(label, value string) {
 		ui.NewStatic(parent, ui.OptsStatic().
 			Text(label).
-			Position(ui.Dpi(10, y)))
+			Position(ui.Dpi(20, y)).
+			Size(ui.Dpi(150, 16)))
 		ui.NewStatic(parent, ui.OptsStatic().
 			Text(value).
-			Position(ui.Dpi(180, y)).
-			Size(ui.Dpi(contentW-200, 16)))
-		y += 22
+			Position(ui.Dpi(170, y)).
+			Size(ui.Dpi(contentW-180, 16)))
+		y += 18
 	}
 
-	row("Base directory:", app.baseDir)
-	row("Config file:", filepath.Join(app.baseDir, "config.json"))
-	row("Windows hosts:", DefaultHostsFile())
-	row("Apache vhosts:", ExpandPath(app.cfg.Settings.ApacheVhostsInclude, app.baseDir))
-	row("Nginx sites dir:", ExpandPath(app.cfg.Settings.NginxSitesDir, app.baseDir))
-	row("Downloads cache:", filepath.Join(app.baseDir, "downloads"))
-	row("Services loaded:", fmt.Sprintf("%d total, %d enabled",
+	// ----- Paths --------------------------------------------------
+	section("PATHS")
+	row("Install dir", app.baseDir)
+	row("Config", filepath.Join(app.baseDir, "config.json"))
+	row("Apache vhosts", ExpandPath(app.cfg.Settings.ApacheVhostsInclude, app.baseDir))
+	row("Nginx sites", ExpandPath(app.cfg.Settings.NginxSitesDir, app.baseDir))
+	row("Hosts file", DefaultHostsFile())
+	row("Downloads cache", filepath.Join(app.baseDir, "downloads"))
+
+	// ----- State --------------------------------------------------
+	y += 8
+	section("STATE")
+	row("Services", fmt.Sprintf("%d total · %d enabled",
 		len(app.cfg.Services), countEnabledServices()))
-	row("Vhosts loaded:", fmt.Sprintf("%d", len(app.cfg.Vhosts)))
-	autoStartState := "no"
+	row("Vhosts", fmt.Sprintf("%d", len(app.cfg.Vhosts)))
+	row("Active web server", activeWebServer())
+	autoStartState := "off"
 	if isAutoStartEnabled() {
-		autoStartState = "yes — launches hidden into tray on login"
+		autoStartState = "on — launches into tray on login"
 	}
-	row("Auto-start on boot:", autoStartState)
-
-	// Show elevation status — needed for hosts file writes when
-	// applying virtual hosts. The "Restart as Admin" button below
-	// is only rendered when this is "no".
-	elev := "no — vhost Apply will fail with 'Access is denied'"
+	row("Auto-start on boot", autoStartState)
+	elev := "no — vhost Apply needs admin"
 	if IsElevated() {
 		elev = "yes (administrator)"
 	}
-	row("Running elevated:", elev)
+	row("Running elevated", elev)
 
+	// ----- Actions ------------------------------------------------
 	y += 12
-	x := 10
-	addBtn := func(label string, w int, scheme ColorScheme, onClick func()) {
+	section("ACTIONS")
+
+	// Buttons in a tidy 4-column grid. Each column is 180px wide,
+	// each button 170px, gap 10. Two rows max so nothing wraps off
+	// the page.
+	const (
+		btnW = 170
+		btnH = 28
+		gapX = 10
+		gapY = 8
+		col0 = 20
+	)
+	col := 0
+	rowY := y
+	addBtn := func(label string, scheme ColorScheme, onClick func()) {
+		x := col0 + col*(btnW+gapX)
 		b := newColoredButton(parent, ui.OptsButton().
 			Text(label).
-			Position(ui.Dpi(x, y)).
-			Width(ui.DpiX(w)).Height(ui.DpiY(26)),
+			Position(ui.Dpi(x, rowY)).
+			Width(ui.DpiX(btnW)).Height(ui.DpiY(btnH)),
 			scheme)
 		b.On().BnClicked(onClick)
-		x += w + 6
+		col++
+		if col >= 4 {
+			col = 0
+			rowY += btnH + gapY
+		}
 	}
-	// Four buttons: the essentials. Removed "Open base dir" and "Clear
-	// downloads cache" and "Hide to Tray" — those are reachable from
-	// the tray menu and the Services page.
-	addBtn("Edit config", 110, SchemePrimary, func() {
+
+	addBtn("Edit config", SchemePrimary, func() {
 		showPage("editor")
 		loadFileIntoEditor(filepath.Join(app.baseDir, "config.json"))
 	})
-	addBtn("Reload config", 120, SchemeNeutral, func() {
+	addBtn("Reload config", SchemeNeutral, func() {
 		if err := reloadConfig(); err != nil {
 			app.appendLog("reload: " + err.Error())
 			return
@@ -1056,27 +1488,21 @@ func buildSettingsPage(parent *ui.Control) {
 		populateEditorDropdown()
 		app.appendLog("config reloaded")
 	})
-	addBtn("Toggle Auto-start", 150, SchemePrimary, func() {
+	addBtn("Toggle Auto-start", SchemePrimary, func() {
 		toggleAutoStart()
 	})
 	if !IsElevated() {
-		// Show the elevation button only when we're not already
-		// admin. Once elevated, the button would just no-op.
-		addBtn("Restart as Admin", 150, SchemeWarning, func() {
+		addBtn("Restart as Admin", SchemeWarning, func() {
 			if err := RelaunchElevated(); err != nil {
 				app.appendLog("elevate: " + err.Error())
 				return
 			}
-			// Hand off cleanly: stop everything we manage so
-			// the elevated instance can take over the ports.
 			app.appendLog("relaunching as administrator — this instance will exit")
 			time.Sleep(200 * time.Millisecond)
 			quitApp(app.wnd)
 		})
 	}
-	addBtn("Add tools to PATH", 160, SchemeSuccess, func() {
-		// Runs synchronously — registry writes are fast and the
-		// broadcast is bounded to 1 second per window.
+	addBtn("Add tools to PATH", SchemeSuccess, func() {
 		n, err := AddGoamppToUserPath()
 		if err != nil {
 			app.appendLog("path: " + err.Error())
@@ -1087,9 +1513,9 @@ func buildSettingsPage(parent *ui.Control) {
 			return
 		}
 		app.appendLog(fmt.Sprintf("path: added %d goampp bin dirs to user PATH", n))
-		app.appendLog("path: open a NEW terminal to use them — already-running shells keep the old PATH")
+		app.appendLog("path: open a NEW terminal to use them")
 	})
-	addBtn("Remove from PATH", 150, SchemeWarning, func() {
+	addBtn("Remove from PATH", SchemeWarning, func() {
 		n, err := RemoveGoamppFromUserPath()
 		if err != nil {
 			app.appendLog("path: " + err.Error())
@@ -1101,7 +1527,26 @@ func buildSettingsPage(parent *ui.Control) {
 		}
 		app.appendLog(fmt.Sprintf("path: removed %d goampp entries from user PATH", n))
 	})
-	addBtn("Quit", 90, SchemeDanger, func() {
+	// Postgres console — opens a cmd window with bin/pgsql/bin/ on
+	// PATH so the user can run psql / pg_dump / createdb without
+	// fishing for the path. Only useful if Postgres is installed,
+	// but harmless when it's not (cmd just opens, missing exe at
+	// most prints "not recognized" on first command).
+	addBtn("Open psql Console", SchemePrimary, func() {
+		pgBin := filepath.Join(app.baseDir, "bin", "pgsql", "bin")
+		if _, err := os.Stat(filepath.Join(pgBin, "psql.exe")); err != nil {
+			app.appendLog("psql: PostgreSQL not installed — install it from the Services tab first")
+			return
+		}
+		// Launch a detached cmd window with PATH primed and a friendly
+		// banner. /K keeps the prompt open after psql exits.
+		cmd := exec.Command("cmd", "/c", "start", "", "cmd", "/K",
+			"set PATH="+pgBin+";%PATH% && cd /d "+app.baseDir+
+				" && echo PostgreSQL console — try: psql -U postgres")
+		cmd.SysProcAttr = &syscall.SysProcAttr{HideWindow: false}
+		_ = cmd.Start()
+	})
+	addBtn("Quit GoAMPP", SchemeDanger, func() {
 		quitApp(app.wnd)
 	})
 }
@@ -1442,28 +1887,40 @@ func startService(idx int) {
 		}
 		return
 	}
-	if _, err := os.Stat(ms.Service.ExePath); err != nil {
-		if _, ok := DownloadCatalog[ms.Conf.Name]; !ok {
-			app.appendLog(fmt.Sprintf("[%s] exe missing: %s", ms.Conf.Name, ms.Service.ExePath))
-			return
-		}
+	// Two failure modes the sentinel catches:
+	//   1. Service was never installed at all (exe missing).
+	//   2. Partial install — exe is there but the install is otherwise
+	//      busted (e.g. Apache has bin/httpd.exe but no conf/httpd.conf
+	//      because AV quarantined the rest of the zip, or MySQL has
+	//      mysqld.exe but data/mysql/ was never seeded by install-db).
+	// Both look the same to the user and both demand the same fix:
+	// re-run DownloadAndInstall, which wipes InstallDir and re-extracts.
+	_, hasCatalog := DownloadCatalog[ms.Conf.Name]
+	if hasCatalog && !IsInstalled(ms.Conf.Name, app.baseDir) {
 		name := ms.Conf.Name
 		svc := ms.Service
-		app.appendLog(fmt.Sprintf("[%s] not installed — auto-downloading...", name))
+		// If the user previously picked a specific version (PHP 8.2,
+		// Node 20, etc.), honour that — installing the catalogue's
+		// default would overwrite their choice and, worse, try to
+		// MkdirAll the canonical InstallDir which is now a junction
+		// to bin/<svc>-<version>. Pass the saved ActiveVersion so the
+		// install lands in the correct bin/<svc>-<version>/ tree.
+		version := ms.Conf.ActiveVersion
+		app.appendLog(fmt.Sprintf("[%s] install incomplete — auto-reinstalling...", name))
 		go func() {
-			if err := DownloadAndInstall(name, app.baseDir, app.appendLog, uiDownloadProgress); err != nil {
+			if err := DownloadAndInstallVersion(name, version, app.baseDir, app.appendLog, uiDownloadProgress); err != nil {
 				app.appendLog(fmt.Sprintf("[%s] install failed: %v", name, err))
 				return
 			}
 			app.wnd.UiThread(refreshServiceList)
-			if _, err := os.Stat(svc.ExePath); err != nil {
-				app.appendLog(fmt.Sprintf("[%s] exe still not at %s — check config.json", name, svc.ExePath))
-				return
-			}
 			if err := svc.Start(); err != nil {
 				app.appendLog(fmt.Sprintf("[%s] start: %v", name, err))
 			}
 		}()
+		return
+	}
+	if _, err := os.Stat(ms.Service.ExePath); err != nil {
+		app.appendLog(fmt.Sprintf("[%s] exe missing: %s", ms.Conf.Name, ms.Service.ExePath))
 		return
 	}
 	if err := ms.Service.Start(); err != nil {

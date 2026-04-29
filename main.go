@@ -216,6 +216,17 @@ func main() {
 		refreshProjectList()
 		populateEditorDropdown()
 		showPage("services")
+
+		// Self-heal Apache's runtime-state files (vhosts.conf +
+		// welcome page + phpinfo shortcut). Only does anything when
+		// Apache is already installed and one of the files is
+		// missing — typical after an upgrade from a GoAMPP version
+		// that didn't ship the self-heal. Idempotent; the happy
+		// path is three stat() calls that return 'exists' and bail.
+		apachePath := filepath.Join(baseDir, "bin", "apache", "bin", "httpd.exe")
+		if _, err := os.Stat(apachePath); err == nil {
+			ensureApacheRuntimeFiles(baseDir, app.appendLog)
+		}
 		// Kick off any auto-start services.
 		for _, name := range cfg.Settings.AutoStart {
 			if ms := app.findService(name); ms != nil && ms.Service != nil {
