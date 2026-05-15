@@ -168,9 +168,9 @@ type VariantSpec struct {
 // to bump versions.
 var DownloadCatalog = map[string]DownloadSpec{
 	"Apache": {
-		Version:    "2.4.66 (VS18, win64)",
-		URL:        "https://www.apachelounge.com/download/VS18/binaries/httpd-2.4.66-260223-Win64-VS18.zip",
-		FileName:   "httpd-2.4.66-260223-Win64-VS18.zip",
+		Version:    "2.4.67 (VS18, win64)",
+		URL:        "https://www.apachelounge.com/download/VS18/binaries/httpd-2.4.67-260504-Win64-VS18.zip",
+		FileName:   "httpd-2.4.67-260504-Win64-VS18.zip",
 		InstallDir: "bin/apache",
 		StripTop:   "Apache24/",
 		Kind:       "zip",
@@ -295,9 +295,9 @@ var DownloadCatalog = map[string]DownloadSpec{
 		// kept so older configs without an active_version still work.
 		// When the user picks a different version from the card's
 		// dropdown, that variant's URL takes over.
-		Version:    "8.5.5 NTS x64",
-		URL:        "https://downloads.php.net/~windows/releases/php-8.5.5-nts-Win32-vs17-x64.zip",
-		FileName:   "php-8.5.5-nts-Win32-vs17-x64.zip",
+		Version:    "8.5.6 NTS x64",
+		URL:        "https://downloads.php.net/~windows/releases/php-8.5.6-nts-Win32-vs17-x64.zip",
+		FileName:   "php-8.5.6-nts-Win32-vs17-x64.zip",
 		InstallDir: "bin/php",
 		// Variants is the per-major-version PHP catalogue. Each entry
 		// installs into bin/php-{Version}/; the active one is exposed
@@ -309,8 +309,8 @@ var DownloadCatalog = map[string]DownloadSpec{
 			{Version: "8.1", URL: "https://windows.php.net/downloads/releases/archives/php-8.1.31-nts-Win32-vs16-x64.zip", FileName: "php-8.1.31-nts-Win32-vs16-x64.zip", Notes: "PHP 8.1 — VS16 (VS2019) runtime."},
 			{Version: "8.2", URL: "https://windows.php.net/downloads/releases/archives/php-8.2.27-nts-Win32-vs16-x64.zip", FileName: "php-8.2.27-nts-Win32-vs16-x64.zip", Notes: "PHP 8.2 — VS16 (VS2019) runtime."},
 			{Version: "8.3", URL: "https://windows.php.net/downloads/releases/archives/php-8.3.15-nts-Win32-vs16-x64.zip", FileName: "php-8.3.15-nts-Win32-vs16-x64.zip", Notes: "PHP 8.3 — VS16 (VS2019) runtime."},
-			{Version: "8.4", URL: "https://windows.php.net/downloads/releases/php-8.4.1-nts-Win32-vs17-x64.zip", FileName: "php-8.4.1-nts-Win32-vs17-x64.zip", Notes: "PHP 8.4 — VS17 (VS2022) runtime, v14.4+."},
-			{Version: "8.5", URL: "https://downloads.php.net/~windows/releases/php-8.5.5-nts-Win32-vs17-x64.zip", FileName: "php-8.5.5-nts-Win32-vs17-x64.zip", Notes: "PHP 8.5 — VS17 (VS2022) runtime, v14.4+."},
+			{Version: "8.4", URL: "https://windows.php.net/downloads/releases/php-8.4.21-nts-Win32-vs17-x64.zip", FileName: "php-8.4.21-nts-Win32-vs17-x64.zip", Notes: "PHP 8.4 — VS17 (VS2022) runtime, v14.4+."},
+			{Version: "8.5", URL: "https://downloads.php.net/~windows/releases/php-8.5.6-nts-Win32-vs17-x64.zip", FileName: "php-8.5.6-nts-Win32-vs17-x64.zip", Notes: "PHP 8.5 — VS17 (VS2022) runtime, v14.4+."},
 		},
 		StripTop:   "", // archive is flat
 		Kind:       "zip",
@@ -373,17 +373,32 @@ var DownloadCatalog = map[string]DownloadSpec{
 			// the comments block, which would cause a duplicate load
 			// and "Module 'mysqli' is already loaded" warnings that
 			// poison CGI headers.
-			// Default extensions:
-			//   curl/fileinfo/gd/mbstring/openssl/zip — phpMyAdmin essentials
-			//   mysqli/pdo_mysql                       — MariaDB drivers
-			//   pdo_pgsql/pgsql                        — PostgreSQL drivers
-			//   intl                                   — required by Laravel,
-			//                                            CodeIgniter 4, Symfony
-			//   sodium                                 — modern crypto
+			// Enable everything modern PHP dev typically wants on
+			// out of the box. Grouped by purpose so future edits
+			// know what each line buys you. Anything that needs an
+			// external client library to even load (oci8, sqlsrv,
+			// pdo_firebird, snmp, ldap on some Windows builds) is
+			// deliberately skipped — listing it here would just
+			// throw "Unable to load dynamic library" on startup.
 			exts := []string{
-				"curl", "fileinfo", "gd", "intl", "mbstring",
-				"mysqli", "openssl", "pdo_mysql", "pdo_pgsql",
-				"pgsql", "sodium", "zip",
+				// Core HTTP / file / encoding
+				"bz2", "curl", "exif", "fileinfo", "ftp", "gd",
+				"gettext", "gmp", "mbstring", "openssl", "zip",
+
+				// Internationalisation (Laravel, CodeIgniter 4,
+				// Symfony all require ext-intl).
+				"intl",
+
+				// Database drivers — every common dev DB.
+				"mysqli", "pdo_mysql",
+				"pdo_pgsql", "pgsql",
+				"pdo_sqlite", "sqlite3",
+
+				// Remote / IPC / serialisation
+				"soap", "sockets", "xsl",
+
+				// Modern crypto.
+				"sodium",
 			}
 			for _, e := range exts {
 				re := regexp.MustCompile(`(?m)^;extension\s*=\s*` + e + `\b.*`)
@@ -471,20 +486,28 @@ var DownloadCatalog = map[string]DownloadSpec{
 		},
 	},
 	"PostgreSQL": {
-		Version:    "18.3 (EDB)",
-		URL:        "https://sbp.enterprisedb.com/getfile.jsp?fileid=1260119",
-		FileName:   "postgresql-18.3-1-windows-x64-binaries.zip",
+		// Stayed on 16.6 LTS instead of 17/18 because the newer EDB
+		// Windows binaries crash bootstrap with 0xC0000005 on a
+		// surprising number of Windows builds (Defender / WinSxS /
+		// reparse-point quirks combined with PG's child-process
+		// init code). 16.6 is the last release where bootstrap is
+		// known-stable across the Windows configurations we test
+		// against — and 16 is supported by community LTS until
+		// 2028, so users aren't left behind.
+		Version:    "16.6 LTS (EDB)",
+		URL:        "https://get.enterprisedb.com/postgresql/postgresql-16.6-1-windows-x64-binaries.zip",
+		FileName:   "postgresql-16.6-1-windows-x64-binaries.zip",
 		InstallDir: "bin/pgsql",
 		StripTop:   "pgsql/",
 		Kind:       "zip",
 		// Sentinel proves BOTH the zip extracted AND initdb
 		// completed (data/PG_VERSION is the very last file initdb
 		// creates). bin/postgres.exe alone would silently OK an
-		// install whose data/ initdb wiped after a 0xC0000005
-		// crash, leaving "could not access directory" on every
-		// Start until the user manually intervened.
+		// install whose data/ initdb wiped after a crash, leaving
+		// "could not access directory" on every Start until the
+		// user manually intervened.
 		CheckFile:  "data/PG_VERSION",
-		Notes:      "EDB binaries — locale provider forced to builtin to bypass ICU.",
+		Notes:      "EDB 16.6 LTS — most stable Postgres on Windows; supported until 2028.",
 		PostInstall: func(installDir string, log func(string)) error {
 			dataDir := filepath.Join(installDir, "data")
 			if _, err := os.Stat(filepath.Join(dataDir, "PG_VERSION")); err == nil {
@@ -526,26 +549,24 @@ var DownloadCatalog = map[string]DownloadSpec{
 			}
 			defer os.Remove(pwTmp)
 
-			// --locale-provider=builtin + --builtin-locale=C bypasses
-			// ICU entirely. Postgres 18 defaults the locale provider
-			// to ICU on Windows, which depends on libicu*.dll being
-			// loadable from the postgres child process. Some Windows
-			// configurations refuse to load it (AV / WinSxS issues),
-			// causing the same 0xC0000005 we patched above. The
-			// builtin provider needs no DLL — pure C locale.
-			//
-			// --no-instructions suppresses the "Success. You can now
-			// start the database server using: ..." footer that
-			// trips up our log parsing.
-			log("  initializing PostgreSQL cluster (user=postgres, password=postgres, locale=builtin C, auth=trust)...")
+			// PG 16 doesn't support --locale-provider=builtin (that's
+			// PG 17+). Instead we rely on:
+			//   --locale=C            — minimal C locale, no ICU lookup
+			//   -E SQL_ASCII          — avoids any UTF-8 / ICU code path
+			//                            during bootstrap (UTF8 still
+			//                            usable per-database after init)
+			//   --no-instructions     — suppresses the "Success" footer
+			// SQL_ASCII at cluster level is the safest known config —
+			// individual databases created later via psql/Adminer can
+			// still be UTF8 (CREATE DATABASE foo ENCODING 'UTF8' ...).
+			log("  initializing PostgreSQL cluster (user=postgres, password=postgres, locale=C, auth=trust)...")
 			cmd := exec.Command(initExe,
 				"-D", dataDir,
 				"-U", "postgres",
 				"--pwfile="+pwTmp,
-				"-E", "UTF8",
+				"-E", "SQL_ASCII",
 				"-A", "trust",
-				"--locale-provider=builtin",
-				"--builtin-locale=C",
+				"--locale=C",
 				"--no-instructions",
 			)
 			out, err := cmd.CombinedOutput()
@@ -624,6 +645,20 @@ var DownloadCatalog = map[string]DownloadSpec{
 			return os.WriteFile(target, data, 0o644)
 		},
 	},
+	"pgweb": {
+		// Beautiful single-binary PostgreSQL web client. Way nicer
+		// than Adminer for Postgres specifically — built for PG so
+		// it gets the schema browser, index editor, EXPLAIN viewer,
+		// and CSV/JSON export without forcing the multi-DB lowest-
+		// common-denominator UX.
+		Version:    "0.16.2",
+		URL:        "https://github.com/sosedoff/pgweb/releases/download/v0.16.2/pgweb_windows_amd64.zip",
+		FileName:   "pgweb_windows_amd64.zip",
+		InstallDir: "bin/pgweb",
+		Kind:       "zip",
+		CheckFile:  "pgweb.exe",
+		Notes:      "Modern PostgreSQL web client — runs at http://localhost:8081 once started.",
+	},
 	"Adminer": {
 		Version:    "5.4.2",
 		URL:        "https://github.com/vrana/adminer/releases/download/v5.4.2/adminer-5.4.2-en.php",
@@ -632,6 +667,41 @@ var DownloadCatalog = map[string]DownloadSpec{
 		Kind:       "file",
 		TargetFile: "index.php",
 		CheckFile:  "index.php",
+		PostInstall: func(installDir string, log func(string)) error {
+			// Adminer 5.4.2 ships a single-file minified bundle.
+			// Subclassing won't work because every class is renamed
+			// to obscured one-letter symbols (`class c`, `class AS`),
+			// so `extends \Adminer\Adminer` finds nothing and the
+			// override is silently dropped. Instead patch the bundle
+			// itself: rewrite the empty-password guard inside login()
+			// so it never trips. The pattern we target is:
+			//
+			//   function login($X,$Y){if($Y=="")return
+			//     sprintf('Adminer does not support accessing ...
+			//
+			// We swap the `if($Y=="")` to `if(false)` — the rest of
+			// login() already returns true on success, so the
+			// password gate is skipped end-to-end. Variable names
+			// are minified per release, so we match `\$\w+=="" `
+			// instead of pinning to a specific identifier.
+			target := filepath.Join(installDir, "index.php")
+			data, err := os.ReadFile(target)
+			if err != nil {
+				return fmt.Errorf("read adminer: %w", err)
+			}
+			re := regexp.MustCompile(`if\(\$\w+==""\)return\s+sprintf\('Adminer does not support`)
+			patched := re.ReplaceAllLiteralString(string(data),
+				`if(false)return sprintf('Adminer does not support`)
+			if patched == string(data) {
+				log("  Adminer: empty-password guard pattern not found (already patched?)")
+				return nil
+			}
+			if err := os.WriteFile(target, []byte(patched), 0o644); err != nil {
+				return fmt.Errorf("write patched adminer: %w", err)
+			}
+			log("  patched Adminer to allow blank-password local dev logins")
+			return nil
+		},
 	},
 
 	// ----- Language runtimes (used by frameworks.go scaffolders) -----
@@ -734,6 +804,44 @@ var DownloadCatalog = map[string]DownloadSpec{
 		Kind:       "zip",
 		CheckFile:  "bin/java.exe",
 		Notes:      "Eclipse Temurin LTS — javac, java, jar all under bin/.",
+	},
+
+	// ----- Storage & messaging -----
+
+	"MinIO": {
+		// Single-binary S3-compatible object storage. API on :9010,
+		// web console on :9011 (avoids collision with PHP-FPM on :9000).
+		Version:    "latest",
+		URL:        "https://dl.min.io/server/minio/release/windows-amd64/minio.exe",
+		FileName:   "minio.exe",
+		InstallDir: "bin/minio",
+		Kind:       "file",
+		TargetFile: "minio.exe",
+		CheckFile:  "minio.exe",
+		Notes:      "S3-compatible object storage — API :9010, console at http://localhost:9011 (user: minioadmin).",
+		PostInstall: func(installDir string, log func(string)) error {
+			baseDir := filepath.Dir(filepath.Dir(installDir))
+			dataDir := filepath.Join(baseDir, "data", "minio")
+			if err := os.MkdirAll(dataDir, 0o755); err != nil {
+				return fmt.Errorf("create minio data dir: %w", err)
+			}
+			log("  created data/minio/ — MinIO will store objects here")
+			return nil
+		},
+	},
+
+	"Mailpit": {
+		// Modern email testing tool — catches outbound SMTP and exposes
+		// a clean web UI to inspect messages. Drop-in replacement for
+		// MailHog (still maintained, faster, darker theme).
+		Version:    "1.30.0",
+		URL:        "https://github.com/axllent/mailpit/releases/download/v1.30.0/mailpit-windows-amd64.zip",
+		FileName:   "mailpit-windows-amd64.zip",
+		InstallDir: "bin/mailpit",
+		StripTop:   "",
+		Kind:       "zip",
+		CheckFile:  "mailpit.exe",
+		Notes:      "Email testing — SMTP :1025, web UI at http://localhost:8025.",
 	},
 }
 

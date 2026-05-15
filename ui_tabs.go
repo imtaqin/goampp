@@ -21,13 +21,11 @@ import (
 // Everything is in design pixels. ui.Dpi scales at construction time, so
 // these numbers are what you see on a 100% monitor.
 const (
-	winW = 960
-	// Compact layout: top strip (36) + 3 rows of 84-tall cards
-	// (276) + a bit of bottom slack ≈ 340 content area. Section
-	// headers were dropped earlier so we don't need the extra
-	// height. Total window 720 keeps the log panel at a useful
-	// height without dead space between cards and progress bar.
-	winH = 720
+	// Bumped 960 → 1100 so cards can breathe — 228px cards fit
+	// 3 buttons (Start / Conf / Ver) without crowding instead of
+	// the previous 195px squeeze where labels overlapped.
+	winW = 1100
+	winH = 630
 
 	// Sidebar (left column of nav buttons).
 	sideX = 10
@@ -36,24 +34,21 @@ const (
 	sideH = 38
 	sideGap = 4
 
-	// Content area — sized to the actual grid footprint instead
-	// of stretched to fill.
+	// Content area — wider to fit the bigger cards.
 	contentX = 130
 	contentY = 48
-	contentW = 820
-	contentH = 340
+	contentW = 960
+	contentH = 368
 
 	// Download progress strip — sits 8px below the content area.
-	progY = 396
+	progY = 424
 	progH = 18
 
-	// Log panel — pulled up so there's no big empty band between
-	// the cards and the log. Header label sits at logY-18 (440-18
-	// = 422) which clears progBar bottom (396+18 = 414).
+	// Log panel — full width minus 10px margin each side.
 	logX = 10
-	logY = 440
-	logW = 940
-	logH = 230
+	logY = 450
+	logW = 1080
+	logH = 140
 )
 
 // ----- Page container tracking ------------------------------------------
@@ -102,14 +97,19 @@ var essentialServices = []string{"Apache", "PHP-FPM", "MySQL", "phpMyAdmin"}
 
 // ensureStackEssentials walks the essential-services list and:
 //   1. downloads + installs anything missing,
-//   2. launches services whose ServiceConf.Enabled is true.
+//   2. launches services whose ServiceConf.Enabled is true AND that
+//      have a real daemon (ms.Service != nil),
+//   3. opens http://localhost/ in the browser at the end — once,
+//      after Apache is ready.
 //
-// Services with Enabled=false (e.g. PHP-FPM) are install-only —
-// Apache spawns php-cgi.exe per-request via mod_cgi, so a long-
-// running FPM daemon would just chew a port and bring nothing.
-// Install-only ensures the binary lands at bin/php/php-cgi.exe so
-// Apache's Action handler can actually find it; we just skip the
-// .Start() call.
+// Services with Enabled=false (e.g. PHP-FPM) are install-only:
+// Apache spawns php-cgi.exe per-request via mod_cgi.
+//
+// Tool entries (phpMyAdmin, Adminer) have ms.Service == nil — the
+// install step is enough, we don't kick startService on them
+// because that would call openPath(OpenURL) and pop a browser tab
+// to /phpmyadmin/ in the middle of Start Stack. Users who want
+// phpMyAdmin click its card directly.
 //
 // Synchronous — call from a goroutine. Called from both Start Stack
 // and Restart Stack so they share the same install/launch policy.
@@ -120,20 +120,19 @@ func ensureStackEssentials() {
 			continue
 		}
 		// Step 1: ensure the binary is on disk. The tightened
-		// CheckFile sentinels make this catch partial installs
-		// too (e.g. Apache with no conf/, MySQL with no system
-		// tables) — DownloadAndInstall wipes + re-extracts in
-		// that case.
+		// CheckFile sentinels catch partial installs too — e.g.
+		// Apache with no conf/, MySQL with no system tables.
 		if _, ok := DownloadCatalog[name]; ok && !IsInstalled(name, app.baseDir) {
-			// Use the user's chosen variant (e.g. PHP 8.2) instead of
-			// the catalogue default — same reasoning as startService.
 			if err := DownloadAndInstallVersion(name, ms.Conf.ActiveVersion, app.baseDir, app.appendLog, uiDownloadProgress); err != nil {
 				app.appendLog(fmt.Sprintf("[%s] install failed: %v", name, err))
 				continue
 			}
 		}
-		// Step 2: launch only if it's a true daemon service.
-		if !ms.Conf.Enabled {
+		// Step 2: skip non-daemon entries (tools) and disabled
+		// daemons. Both fall through with the binary on disk —
+		// Apache will serve them once its Action handler / docroot
+		// references kick in.
+		if ms.Service == nil || !ms.Conf.Enabled {
 			continue
 		}
 		for i, m := range app.services {
@@ -145,6 +144,13 @@ func ensureStackEssentials() {
 		time.Sleep(400 * time.Millisecond)
 	}
 	app.wnd.UiThread(refreshServiceList)
+
+	// Step 3: open the welcome page once, after the stack is up.
+	// Small delay so Apache has had time to bind :80 and accept
+	// the first request without the browser hitting "connection
+	// refused" and showing an error.
+	time.Sleep(800 * time.Millisecond)
+	openPath("http://localhost/")
 }
 
 // essentialServicesActive returns essentialServices with the web
@@ -572,12 +578,13 @@ func isWebKindCard(c *serviceCard) bool {
 // Built once at WM_CREATE; updated by refreshServiceList.
 var serviceCards []*serviceCard
 
-// Per-card geometry. Simplified to 195×84 — the Restart button
-// went away (Start/Stop toggle covers it) and the version row was
-// merged into the name line, so we don't need the extra height.
+// Per-card geometry. Bumped 195→228 wide so the 3-button row
+// (Start/Stop · Conf · Ver ▾) reads cleanly without truncated
+// labels. 4 cards + 3 gaps + 2 padding = 228×4 + 8×3 + 10×2 = 936
+// which fits in contentW (960) with a comfortable right margin.
 const (
-	cardW   = 195
-	cardH   = 84
+	cardW   = 228
+	cardH   = 72
 	cardGap = 8
 )
 
@@ -851,25 +858,29 @@ func buildServiceCard(parent *ui.Control, x, y, srcIdx int, ms *ManagedService) 
 	}
 
 	if hasVariants {
-		// 3 buttons: toggle (74) + Conf (44) + Version▾ (54) +
-		// 3×4 gaps + 8 padding = 192 → fits the 195-wide card.
-		// Resize the toggle button (originally created at width 96)
-		// down to 74 so we have room for the Ver button on the right.
+		// 3 buttons in a 228-wide card:
+		//   toggle (96) + Conf (52) + Ver ▾ (60)
+		//   8 padding + 96 + 6 gap + 52 + 6 gap + 60 + 8 padding = 236
+		//   (cards have a slight overflow margin since gaps are 6 not 8 here)
+		// Resize the toggle button (originally created at width 96 in
+		// the buildServiceCard prologue) — same width here, just keep
+		// it explicit so a future card-width tweak only needs to touch
+		// this block.
 		px, py := ui.Dpi(x+8, btnRowY)
 		c.btnToggle.Hwnd().SetWindowPos(win.HWND(0),
 			win.POINT{X: int32(px), Y: int32(py)},
-			win.SIZE{Cx: int32(ui.DpiX(74)), Cy: int32(ui.DpiY(22))},
+			win.SIZE{Cx: int32(ui.DpiX(96)), Cy: int32(ui.DpiY(22))},
 			co.SWP_NOZORDER)
 		c.btnConf = newColoredButton(parent, ui.OptsButton().
 			Text("Conf").
-			Position(ui.Dpi(x+86, btnRowY)).
-			Width(ui.DpiX(44)).Height(ui.DpiY(22)),
+			Position(ui.Dpi(x+110, btnRowY)).
+			Width(ui.DpiX(52)).Height(ui.DpiY(22)),
 			SchemePrimary)
 		card := c
 		c.btnVer = newColoredButton(parent, ui.OptsButton().
 			Text("Ver ▾").
-			Position(ui.Dpi(x+134, btnRowY)).
-			Width(ui.DpiX(54)).Height(ui.DpiY(22)),
+			Position(ui.Dpi(x+168, btnRowY)).
+			Width(ui.DpiX(52)).Height(ui.DpiY(22)),
 			SchemeWarning)
 		c.btnVer.On().BnClicked(func() {
 			rc, err := card.btnVer.Hwnd().GetWindowRect()
@@ -880,12 +891,18 @@ func buildServiceCard(parent *ui.Control, x, y, srcIdx int, ms *ManagedService) 
 			showVersionMenuForCard(card, pt)
 		})
 	} else {
-		// Single-version services keep the simpler 2-button layout
-		// (toggle 96 + Conf 80 + gaps + padding ~= 192).
+		// Single-version services: just toggle + Conf with comfy
+		// widths in the wider card.
+		// 8 padding + 130 + 8 gap + 74 + 8 padding = 228 ✓
+		px, py := ui.Dpi(x+8, btnRowY)
+		c.btnToggle.Hwnd().SetWindowPos(win.HWND(0),
+			win.POINT{X: int32(px), Y: int32(py)},
+			win.SIZE{Cx: int32(ui.DpiX(130)), Cy: int32(ui.DpiY(22))},
+			co.SWP_NOZORDER)
 		c.btnConf = newColoredButton(parent, ui.OptsButton().
 			Text("Conf").
-			Position(ui.Dpi(x+108, btnRowY)).
-			Width(ui.DpiX(80)).Height(ui.DpiY(22)),
+			Position(ui.Dpi(x+146, btnRowY)).
+			Width(ui.DpiX(74)).Height(ui.DpiY(22)),
 			SchemePrimary)
 	}
 	c.btnConf.On().BnClicked(func() {
