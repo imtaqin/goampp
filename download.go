@@ -806,7 +806,89 @@ var DownloadCatalog = map[string]DownloadSpec{
 		Notes:      "Eclipse Temurin LTS — javac, java, jar all under bin/.",
 	},
 
-	// ----- Storage & messaging -----
+	// ----- Storage, messaging & queues -----
+
+	"Erlang": {
+		// Erlang/OTP runtime — required by RabbitMQ. NSIS installer,
+		// run silently with /S /D=<installDir>. GoAMPP handles this via
+		// Kind: "exe" which is treated as a silent installer.
+		Version:    "29.0 (OTP-29)",
+		URL:        "https://github.com/erlang/otp/releases/download/OTP-29.0/otp_win64_29.0.exe",
+		FileName:   "otp_win64_29.0.exe",
+		InstallDir: "bin/erlang",
+		Kind:       "exe",
+		CheckFile:  "bin/erl.exe",
+		Notes:      "Erlang/OTP runtime — required by RabbitMQ. Installed silently.",
+	},
+
+	"RabbitMQ": {
+		// AMQP message broker. Requires Erlang (see above) — GoAMPP
+		// installs Erlang first via the RabbitMQ PostInstall hook.
+		// AMQP on :5672, management UI on :15672 (user: guest/guest).
+		Version:    "4.3.0",
+		URL:        "https://github.com/rabbitmq/rabbitmq-server/releases/download/v4.3.0/rabbitmq-server-windows-4.3.0.zip",
+		FileName:   "rabbitmq-server-windows-4.3.0.zip",
+		InstallDir: "bin/rabbitmq",
+		StripTop:   "rabbitmq_server-4.3.0/",
+		Kind:       "zip",
+		CheckFile:  "sbin/rabbitmq-server.bat",
+		Notes:      "AMQP message broker — AMQP :5672, management UI :15672 (guest/guest).",
+		PostInstall: func(installDir string, log func(string)) error {
+			baseDir := filepath.Dir(filepath.Dir(installDir))
+
+			// Ensure Erlang is installed before RabbitMQ can run.
+			// Inline install to avoid a DownloadCatalog cycle.
+			erlangDir := filepath.Join(baseDir, "bin", "erlang")
+			if _, err := os.Stat(filepath.Join(erlangDir, "bin", "erl.exe")); err != nil {
+				log("  Erlang not found — downloading OTP 29.0...")
+				erlExe := filepath.Join(baseDir, "downloads", "otp_win64_29.0.exe")
+				const erlURL = "https://github.com/erlang/otp/releases/download/OTP-29.0/otp_win64_29.0.exe"
+				if _, err := os.Stat(erlExe); err != nil {
+					if err := httpDownload(erlURL, erlExe, log, nil); err != nil {
+						return fmt.Errorf("erlang download: %w", err)
+					}
+				}
+				log("  installing Erlang OTP silently...")
+				if err := os.MkdirAll(erlangDir, 0o755); err != nil {
+					return fmt.Errorf("erlang dir: %w", err)
+				}
+				abs, _ := filepath.Abs(erlangDir)
+				cmd := exec.Command(erlExe, "/S", "/D="+abs)
+				cmd.SysProcAttr = &syscall.SysProcAttr{HideWindow: true, CreationFlags: 0x08000000}
+				if out, err := cmd.CombinedOutput(); err != nil {
+					log("  erlang installer: " + strings.TrimSpace(string(out)))
+					return fmt.Errorf("erlang install: %w", err)
+				}
+				log("  Erlang OTP installed")
+			}
+
+			// Create the data directory RabbitMQ uses for mnesia, logs, etc.
+			dataDir := filepath.Join(baseDir, "data", "rabbitmq")
+			if err := os.MkdirAll(dataDir, 0o755); err != nil {
+				return fmt.Errorf("create rabbitmq data dir: %w", err)
+			}
+			log("  created data/rabbitmq/ — RabbitMQ stores state here")
+
+			// Enable the management plugin so the web UI is available.
+			// Run rabbitmq-plugins.bat via cmd.exe with ERLANG_HOME set.
+			pluginsExe := filepath.Join(installDir, "sbin", "rabbitmq-plugins.bat")
+			if _, err := os.Stat(pluginsExe); err == nil {
+				cmd := exec.Command("cmd.exe", "/c", pluginsExe, "enable", "rabbitmq_management")
+				cmd.Env = append(os.Environ(),
+					"ERLANG_HOME="+erlangDir,
+					"RABBITMQ_BASE="+dataDir,
+				)
+				cmd.SysProcAttr = &syscall.SysProcAttr{HideWindow: true, CreationFlags: 0x08000000}
+				if out, err := cmd.CombinedOutput(); err != nil {
+					log("  rabbitmq-plugins: " + strings.TrimSpace(string(out)))
+					// Non-fatal — management plugin missing just means no web UI.
+				} else {
+					log("  enabled rabbitmq_management plugin")
+				}
+			}
+			return nil
+		},
+	},
 
 	"MinIO": {
 		// Single-binary S3-compatible object storage. API on :9010,
@@ -1013,6 +1095,21 @@ func DownloadAndInstallVersion(name, version, baseDir string, log func(string), 
 			progress("idle", name, 0, 0)
 			return fmt.Errorf("copy: %w", err)
 		}
+	case "exe":
+		// NSIS / Inno Setup silent installer.
+		// /S = silent mode (standard NSIS flag).
+		// /D=<dir> = install directory (must be absolute, NSIS requirement).
+		log(fmt.Sprintf("  running silent installer → %s (this may take 30–60s)", installDir))
+		progress("post-install", name, 0, 0)
+		absInstallDir, _ := filepath.Abs(installDir)
+		cmd := exec.Command(dlPath, "/S", "/D="+absInstallDir)
+		cmd.SysProcAttr = &syscall.SysProcAttr{HideWindow: true, CreationFlags: 0x08000000}
+		if out, err := cmd.CombinedOutput(); err != nil {
+			log("  installer output: " + strings.TrimSpace(string(out)))
+			progress("idle", name, 0, 0)
+			return fmt.Errorf("silent installer: %w", err)
+		}
+		log("  installer finished")
 	default:
 		progress("idle", name, 0, 0)
 		return fmt.Errorf("unknown kind: %q", spec.Kind)

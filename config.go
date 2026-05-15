@@ -80,6 +80,10 @@ type ServiceConf struct {
 	// Empty means "use the catalogue's flat default URL". Persisted
 	// to config.json so version choices stick across restarts.
 	ActiveVersion string `json:"active_version,omitempty"`
+	// Env is a list of "KEY=VALUE" pairs merged into the process environment
+	// when the service is launched. {base} expansion applies to each value.
+	// Useful for services like RabbitMQ that need ERLANG_HOME set.
+	Env []string `json:"env,omitempty"`
 }
 
 // Vhost describes one virtual host. A vhost may map to Apache, Nginx, or both;
@@ -271,6 +275,31 @@ func DefaultConfig(baseDir string) *Config {
 				Port:    8081,
 				Enabled: false, // user starts it manually from the card
 				OpenURL: "http://localhost:8081/",
+			},
+
+			// ----- Message queues -----
+			{
+				// Erlang is a dependency, not a user-started service.
+				// The card installs Erlang; RabbitMQ PostInstall also
+				// auto-installs it, so users rarely need to click this.
+				Name: "Erlang", Kind: "runtime",
+				Enabled: false,
+			},
+			{
+				Name: "RabbitMQ", Kind: "queue",
+				// rabbitmq-server.bat is a batch file — needs cmd.exe /c.
+				ExePath: "cmd.exe",
+				Args: []string{
+					"/c", "{base}/bin/rabbitmq/sbin/rabbitmq-server.bat",
+				},
+				WorkDir: "{base}/bin/rabbitmq",
+				Env: []string{
+					"ERLANG_HOME={base}/bin/erlang",
+					"RABBITMQ_BASE={base}/data/rabbitmq",
+					"RABBITMQ_NODENAME=rabbit@localhost",
+				},
+				Port:    5672, Enabled: false,
+				OpenURL: "http://localhost:15672/",
 			},
 
 			// ----- Storage & messaging -----

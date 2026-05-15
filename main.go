@@ -82,6 +82,7 @@ func main() {
 				Args:    expandArgsList(sc.Args, baseDir),
 				Port:    sc.Port,
 				WorkDir: ExpandPath(sc.WorkDir, baseDir),
+				Env:     expandArgsList(sc.Env, baseDir),
 			}
 			ms.Service.SetLogger(app.appendLog)
 		}

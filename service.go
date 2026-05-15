@@ -7,6 +7,7 @@ import (
 	"fmt"
 	"io"
 	"net"
+	"os"
 	"os/exec"
 	"strings"
 	"sync"
@@ -21,6 +22,10 @@ type Service struct {
 	Args     []string
 	Port     int // port to probe for status ("is it up?")
 	WorkDir  string
+	// Env is additional environment variables merged into the child process
+	// environment. Each entry is "KEY=VALUE". Used by e.g. RabbitMQ to set
+	// ERLANG_HOME without polluting the system environment.
+	Env      []string
 
 	mu      sync.Mutex
 	cmd     *exec.Cmd
@@ -93,6 +98,11 @@ func (s *Service) Start() error {
 	cmd.SysProcAttr = &syscall.SysProcAttr{
 		HideWindow:    true,
 		CreationFlags: 0x08000000, // CREATE_NO_WINDOW
+	}
+
+	// Merge per-service extra environment variables into the child's env.
+	if len(s.Env) > 0 {
+		cmd.Env = append(os.Environ(), s.Env...)
 	}
 
 	// PostgreSQL refuses to start when the process token has the
