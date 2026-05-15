@@ -95,6 +95,19 @@ func (s *Service) Start() error {
 		CreationFlags: 0x08000000, // CREATE_NO_WINDOW
 	}
 
+	// PostgreSQL refuses to start when the process token has the
+	// Administrators SID enabled (pgwin32_is_admin() check in main.c).
+	// Provide a filtered token with the Administrators SID set to
+	// deny-only so the check passes while we're still running elevated.
+	if s.Name == "PostgreSQL" {
+		if tok, err := postgresToken(); err == nil {
+			cmd.SysProcAttr.Token = syscall.Token(tok)
+		} else {
+			s.mu.Unlock()
+			return fmt.Errorf("PostgreSQL token: %w", err)
+		}
+	}
+
 	// Capture stdout and stderr so users can see *why* a service failed.
 	// Without this, Apache's "AH00072: make_sock: could not bind to..."
 	// messages go straight to /dev/null and the user just sees "exit 1".
