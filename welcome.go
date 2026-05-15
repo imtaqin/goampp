@@ -271,10 +271,10 @@ func copyFileIfChanged(src, dst string) error {
 // page so future ensureApacheRuntimeFiles calls can identify
 // "this is OUR file, safe to overwrite on upgrade" vs "the user
 // edited it, leave it alone".
-const welcomeMarker = "@goampp-welcome v5"
+const welcomeMarker = "@goampp-welcome v6"
 
 const welcomeIndexPHP = `<?php
-// @goampp-welcome v5 — DO NOT edit this marker line; GoAMPP looks
+// @goampp-welcome v6 — DO NOT edit this marker line; GoAMPP looks
 // for it on launch to decide whether to ship a refreshed welcome
 // page. Strip the marker (or replace it) to keep your edits safe.
 
@@ -301,6 +301,13 @@ if (class_exists('Redis')) {
         if (@$r->connect('127.0.0.1', 6379, 0.5)) { $redis_status = 'online'; $r->close(); }
     } catch (\Throwable $e) {}
 }
+
+// Probe pgweb on :8081 so the "Modern PostgreSQL UI" tile can
+// either open it (online) or hint that it needs to be started
+// (offline) — same fsockopen pattern as the Postgres probe.
+$pgweb_status = 'offline';
+$conn = @fsockopen('127.0.0.1', 8081, $errno, $errstr, 0.3);
+if ($conn) { $pgweb_status = 'online'; fclose($conn); }
 
 // Postgres probe: a TCP connect to :5432 with a 0.5s timeout. We
 // don't try to authenticate — just check the listener is up. The
@@ -577,11 +584,11 @@ footer a { color: var(--brand); }
                         <span class="d">Universal lightweight DB client</span>
                     </div>
                 </a>
-                <a class="tool" href="/adminer/?pgsql=localhost&amp;username=postgres&amp;db=postgres" target="_blank" rel="noopener">
+                <a class="tool" href="<?= $pgweb_status === 'online' ? 'http://localhost:8081/' : '/adminer/?pgsql=localhost&amp;username=postgres&amp;db=postgres' ?>" target="_blank" rel="noopener">
                     <img src="/assets/icons/postgresql.ico" alt="">
                     <div class="meta">
-                        <span class="t">PostgreSQL Admin</span>
-                        <span class="d">Adminer · password: postgres</span>
+                        <span class="t">PostgreSQL Admin <?= $pgweb_status === 'online' ? '· pgweb' : '· Adminer' ?></span>
+                        <span class="d"><?= $pgweb_status === 'online' ? 'Modern UI on :8081' : 'Start "pgweb" service for the modern UI' ?></span>
                     </div>
                 </a>
                 <a class="tool" href="/phpinfo.php" target="_blank" rel="noopener">

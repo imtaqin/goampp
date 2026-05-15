@@ -145,6 +145,20 @@ func LoadConfig(baseDir string) (*Config, error) {
 			}
 		}
 	}
+	// Migration: append services present in DefaultConfig but absent from
+	// the loaded config. This picks up new services added in later releases
+	// without requiring the user to delete config.json.
+	existing := map[string]bool{}
+	for _, s := range cfg.Services {
+		existing[s.Name] = true
+	}
+	for _, ds := range DefaultConfig(baseDir).Services {
+		if !existing[ds.Name] {
+			cfg.Services = append(cfg.Services, ds)
+			migrated = true
+		}
+	}
+
 	if migrated {
 		_ = SaveConfig(baseDir, &cfg)
 	}
@@ -238,6 +252,46 @@ func DefaultConfig(baseDir string) *Config {
 				Name: "Adminer", Kind: "tool",
 				OpenURL: "http://localhost/adminer/",
 				Enabled: true,
+			},
+			{
+				// pgweb — modern web client for PostgreSQL. Daemon
+				// service that listens on its own port (8081). The
+				// --url flag pre-binds it to our local Postgres
+				// cluster so there's no connection form to fill in
+				// on first open.
+				Name: "pgweb", Kind: "web",
+				ExePath: "{base}/bin/pgweb/pgweb.exe",
+				Args: []string{
+					"--bind=127.0.0.1",
+					"--listen=8081",
+					"--url=postgres://postgres:postgres@localhost:5432/postgres?sslmode=disable",
+					"--skip-open",
+				},
+				WorkDir: "{base}/bin/pgweb",
+				Port:    8081,
+				Enabled: false, // user starts it manually from the card
+				OpenURL: "http://localhost:8081/",
+			},
+
+			// ----- Storage & messaging -----
+			{
+				Name: "MinIO", Kind: "storage",
+				ExePath: "{base}/bin/minio/minio.exe",
+				Args: []string{
+					"server", "{base}/data/minio",
+					"--address", ":9010",
+					"--console-address", ":9011",
+				},
+				WorkDir: "{base}/bin/minio",
+				Port:    9010, Enabled: false,
+				OpenURL: "http://localhost:9011/",
+			},
+			{
+				Name: "Mailpit", Kind: "mail",
+				ExePath: "{base}/bin/mailpit/mailpit.exe",
+				WorkDir: "{base}/bin/mailpit",
+				Port:    8025, Enabled: false,
+				OpenURL: "http://localhost:8025/",
 			},
 
 			// ----- Language runtimes (no long-running process) -----
