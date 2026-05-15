@@ -17,11 +17,12 @@ import (
 // but marked DENY_ONLY — CheckTokenMembership then returns false and postgres
 // starts normally.
 //
-// Strategy (in order):
-//  1. If the current token is elevated AND has a linked standard-user token
-//     (i.e. UAC is on), return that linked token — it's already non-admin.
-//  2. Otherwise call CreateRestrictedToken with the Administrators SID in
-//     SidsToDisable so the deny-only flag is set.
+// We use CreateRestrictedToken (not the UAC linked token). The MSDN docs for
+// CreateProcessAsUser explicitly exempt "restricted version of the caller's
+// primary token" from the SeAssignPrimaryTokenPrivilege requirement, so this
+// path works from an elevated process without enabling any extra privileges.
+// The linked-token path would need SeAssignPrimaryTokenPrivilege enabled,
+// which causes ERROR_PRIVILEGE_NOT_HELD from fork/exec.
 //
 // The caller must close the returned token.
 func postgresToken() (windows.Token, error) {
@@ -36,12 +37,6 @@ func postgresToken() (windows.Token, error) {
 	}
 	defer cur.Close()
 
-	// Prefer the UAC-paired standard-user token — it's already non-admin.
-	if linked, err := cur.GetLinkedToken(); err == nil {
-		return linked, nil
-	}
-
-	// Fallback: duplicate + disable the Administrators SID.
 	return disableAdminSID(cur)
 }
 
