@@ -96,6 +96,24 @@ var logos = []logo{
 		fallbackURL: "https://raw.githubusercontent.com/vrana/adminer/master/adminer/static/logo.png",
 		outName:     "adminer.ico",
 	},
+	{
+		service:     "pgweb",
+		localName:   "pgweb",
+		fallbackURL: "https://raw.githubusercontent.com/sosedoff/pgweb/master/static/favicon.png",
+		outName:     "pgweb.ico",
+	},
+	{
+		service:     "MinIO",
+		localName:   "s3",
+		fallbackURL: "https://raw.githubusercontent.com/minio/minio/master/docs/logo/minio_logo.png",
+		outName:     "minio.ico",
+	},
+	{
+		service:     "Mailpit",
+		localName:   "mailpit",
+		fallbackURL: "https://raw.githubusercontent.com/axllent/mailpit/develop/server/ui/notification.png",
+		outName:     "mailpit.ico",
+	},
 
 	// ----- Frameworks (scaffoldable projects) -----
 	{

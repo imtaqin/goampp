@@ -35,6 +35,10 @@ var serviceIconFiles = map[string]string{
 	// Admin tools
 	"phpMyAdmin": "phpmyadmin.ico",
 	"Adminer":    "adminer.ico",
+	"pgweb":      "pgweb.ico",
+	// Storage & messaging
+	"MinIO":      "minio.ico",
+	"Mailpit":    "mailpit.ico",
 	// Language runtimes (downloadable, no long-running process)
 	"Node.js":    "nodejs.ico",
 	"Python":     "python.ico",
