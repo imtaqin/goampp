@@ -107,15 +107,54 @@ func (s *Service) Start() error {
 
 	// PostgreSQL refuses to start when the process token has the
 	// Administrators SID enabled (pgwin32_is_admin() check in main.c).
-	// Provide a filtered token with the Administrators SID set to
-	// deny-only so the check passes while we're still running elevated.
+	// CreateProcessAsUser needs SeAssignPrimaryTokenPrivilege which is NOT
+	// present in standard elevated admin tokens, so we use
+	// CreateProcessWithTokenW instead — it only needs SeImpersonatePrivilege
+	// which IS enabled by default in elevated processes.
 	if s.Name == "PostgreSQL" {
-		if tok, err := postgresToken(); err == nil {
-			cmd.SysProcAttr.Token = syscall.Token(tok)
-		} else {
-			s.mu.Unlock()
-			return fmt.Errorf("PostgreSQL token: %w", err)
+		env := cmd.Env
+		if len(env) == 0 {
+			env = os.Environ()
 		}
+		pid, outR, errR, err := launchPostgresWithToken(
+			s.ExePath, s.Args, s.WorkDir, env,
+		)
+		if err != nil {
+			s.mu.Unlock()
+			return fmt.Errorf("start PostgreSQL: %w", err)
+		}
+		// Build a minimal exec.Cmd so the rest of Start() / Stop() / Wait()
+		// work unchanged. Process.Wait() on Windows just calls
+		// WaitForSingleObject, which works for any process we can open.
+		cmd.Process, _ = os.FindProcess(pid)
+		s.cmd = cmd
+		onState := s.onState
+		s.mu.Unlock()
+
+		s.log("started (pid %d)", pid)
+		if onState != nil {
+			onState(true, pid)
+		}
+		go streamToLog(outR, s.log)
+		go streamToLog(errR, s.log)
+		go func() {
+			_, werr := cmd.Process.Wait()
+			s.mu.Lock()
+			if s.cmd == cmd {
+				s.cmd = nil
+			}
+			cb := s.onState
+			s.mu.Unlock()
+			if werr != nil {
+				s.log("exited: %v", werr)
+			} else {
+				s.log("exited cleanly")
+			}
+			if cb != nil {
+				cb(false, 0)
+			}
+		}()
+		return nil
 	}
 
 	// Capture stdout and stderr so users can see *why* a service failed.
