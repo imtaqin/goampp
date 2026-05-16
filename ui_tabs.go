@@ -1936,9 +1936,12 @@ func startService(idx int) {
 		}()
 		return
 	}
-	if _, err := os.Stat(ms.Service.ExePath); err != nil {
-		app.appendLog(fmt.Sprintf("[%s] exe missing: %s", ms.Conf.Name, ms.Service.ExePath))
-		return
+	// Skip stat check for bare commands resolved via PATH (e.g. "cmd.exe").
+	if filepath.IsAbs(ms.Service.ExePath) {
+		if _, err := os.Stat(ms.Service.ExePath); err != nil {
+			app.appendLog(fmt.Sprintf("[%s] exe missing: %s", ms.Conf.Name, ms.Service.ExePath))
+			return
+		}
 	}
 	if err := ms.Service.Start(); err != nil {
 		app.appendLog(fmt.Sprintf("[%s] start: %v", ms.Conf.Name, err))

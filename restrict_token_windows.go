@@ -26,6 +26,15 @@ import (
 //
 // The caller must close the returned token.
 func postgresToken() (windows.Token, error) {
+	// CreateProcessAsUser requires these two privileges ENABLED in the calling
+	// process. Both are present-but-disabled in elevated admin tokens.
+	// SeAssignPrimaryTokenPrivilege: needed to assign a non-caller primary
+	// token even when CreateRestrictedToken "restricted version" exemption
+	// applies on some Windows builds but not others.
+	// SeIncreaseQuotaPrivilege: always required by CreateProcessAsUser.
+	_ = enablePrivilege("SeIncreaseQuotaPrivilege")
+	_ = enablePrivilege("SeAssignPrimaryTokenPrivilege")
+
 	var cur windows.Token
 	err := windows.OpenProcessToken(
 		windows.CurrentProcess(),
@@ -38,6 +47,34 @@ func postgresToken() (windows.Token, error) {
 	defer cur.Close()
 
 	return disableAdminSID(cur)
+}
+
+// enablePrivilege enables a named privilege in the current process token.
+// Returns an error only for diagnostics — the caller can ignore it if the
+// privilege is simply absent (e.g. restricted service account).
+func enablePrivilege(name string) error {
+	var token windows.Token
+	if err := windows.OpenProcessToken(
+		windows.CurrentProcess(),
+		windows.TOKEN_ADJUST_PRIVILEGES|windows.TOKEN_QUERY,
+		&token,
+	); err != nil {
+		return err
+	}
+	defer token.Close()
+
+	var luid windows.LUID
+	if err := windows.LookupPrivilegeValue(nil, windows.StringToUTF16Ptr(name), &luid); err != nil {
+		return err
+	}
+
+	privs := windows.Tokenprivileges{
+		PrivilegeCount: 1,
+	}
+	privs.Privileges[0].Luid = luid
+	privs.Privileges[0].Attributes = windows.SE_PRIVILEGE_ENABLED
+
+	return windows.AdjustTokenPrivileges(token, false, &privs, 0, nil, nil)
 }
 
 // disableAdminSID duplicates cur and disables the Administrators group SID

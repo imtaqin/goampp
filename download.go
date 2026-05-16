@@ -812,9 +812,9 @@ var DownloadCatalog = map[string]DownloadSpec{
 		// Erlang/OTP runtime — required by RabbitMQ. NSIS installer,
 		// run silently with /S /D=<installDir>. GoAMPP handles this via
 		// Kind: "exe" which is treated as a silent installer.
-		Version:    "29.0 (OTP-29)",
-		URL:        "https://github.com/erlang/otp/releases/download/OTP-29.0/otp_win64_29.0.exe",
-		FileName:   "otp_win64_29.0.exe",
+		Version:    "27.3.4 (OTP-27)",
+		URL:        "https://github.com/erlang/otp/releases/download/OTP-27.3.4/otp_win64_27.3.4.exe",
+		FileName:   "otp_win64_27.3.4.exe",
 		InstallDir: "bin/erlang",
 		Kind:       "exe",
 		CheckFile:  "bin/erl.exe",
@@ -840,9 +840,9 @@ var DownloadCatalog = map[string]DownloadSpec{
 			// Inline install to avoid a DownloadCatalog cycle.
 			erlangDir := filepath.Join(baseDir, "bin", "erlang")
 			if _, err := os.Stat(filepath.Join(erlangDir, "bin", "erl.exe")); err != nil {
-				log("  Erlang not found — downloading OTP 29.0...")
-				erlExe := filepath.Join(baseDir, "downloads", "otp_win64_29.0.exe")
-				const erlURL = "https://github.com/erlang/otp/releases/download/OTP-29.0/otp_win64_29.0.exe"
+				log("  Erlang not found — downloading OTP 27.3.4...")
+				erlExe := filepath.Join(baseDir, "downloads", "otp_win64_27.3.4.exe")
+				const erlURL = "https://github.com/erlang/otp/releases/download/OTP-27.3.4/otp_win64_27.3.4.exe"
 				if _, err := os.Stat(erlExe); err != nil {
 					if err := httpDownload(erlURL, erlExe, log, nil); err != nil {
 						return fmt.Errorf("erlang download: %w", err)
