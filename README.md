@@ -1,6 +1,6 @@
 # GoAMPP
 
-A native Windows web-stack control panel written in Go. **One 7 MB binary** that downloads Apache, MariaDB, PHP, Node.js, Python, Go, Java, and friends on demand — no installer bloat, no Docker, no WSL, no Electron.
+A native Windows web-stack control panel written in Go. **One 7 MB binary** that downloads Apache, MariaDB, PHP, PostgreSQL, Redis, RabbitMQ, MinIO, Mailpit, Node.js, Python, Go, Java, and friends on demand — no installer bloat, no Docker, no WSL, no Electron.
 
 [![release](https://img.shields.io/github/v/release/imtaqin/goampp)](https://github.com/imtaqin/goampp/releases/latest)
 [![license](https://img.shields.io/github/license/imtaqin/goampp)](LICENSE)
@@ -9,7 +9,7 @@ A native Windows web-stack control panel written in Go. **One 7 MB binary** that
 
 ## Features
 
-- **8 services** in the catalog — Apache, Nginx, MariaDB (as MySQL), PostgreSQL, Redis, PHP-FPM, phpMyAdmin, Adminer
+- **11 services** in the catalog — Apache, Nginx, MariaDB (as MySQL), PostgreSQL, Redis, PHP-FPM, phpMyAdmin, Adminer, pgweb, MinIO, Mailpit, RabbitMQ
 - **4 language runtimes** — Node.js LTS, Python (embeddable + auto-bootstrapped pip), Go, Eclipse Temurin JDK 21
 - **17 framework scaffolders** — Laravel, Laravel + Livewire, Symfony, CodeIgniter 4, WordPress, Next.js, Vite + React, Express, NestJS, AdonisJS, Flask, Django, FastAPI, Go net/http, Gin, Spring Boot, Static HTML
 - **Auto-vhost creation** — writes to Windows hosts file + Apache `vhosts.conf` + Nginx `sites/`
@@ -24,7 +24,7 @@ A native Windows web-stack control panel written in Go. **One 7 MB binary** that
 ## Screenshots
 
 ### Services dashboard
-12 service cards in a 4×3 grid, each with its own logo and Start/Stop/Restart/Conf buttons.
+16 service cards in a 4×4 grid, each with its own logo and Start/Stop/Restart/Conf buttons.
 
 ![Services dashboard](assets/image/services.png)
 
