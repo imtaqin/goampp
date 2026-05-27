@@ -10,6 +10,7 @@ import (
 	"runtime"
 	"strings"
 	"sync"
+	"syscall"
 	"time"
 
 	"github.com/rodrigocfd/windigo/co"
@@ -55,6 +56,18 @@ var app *App
 const maxLogBytes = 200 * 1024
 
 func main() {
+	// Intercept --hide-run flag to act as a silent GUI launcher for console processes
+	// (like postgres.exe) when spawned under runas, to avoid any console windows showing up.
+	if len(os.Args) >= 3 && os.Args[1] == "--hide-run" {
+		cmd := exec.Command(os.Args[2], os.Args[3:]...)
+		cmd.SysProcAttr = &syscall.SysProcAttr{
+			HideWindow:    true,
+			CreationFlags: 0x08000000, // CREATE_NO_WINDOW
+		}
+		_ = cmd.Start()
+		return
+	}
+
 	runtime.LockOSThread()
 
 	baseDir, err := os.Getwd()
