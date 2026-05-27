@@ -343,6 +343,58 @@ func DefaultConfig(baseDir string) *Config {
 				Name: "Java", Kind: "runtime",
 				Enabled: false,
 			},
+			{
+				Name: "Julia", Kind: "runtime",
+				Enabled: false,
+			},
+			{
+				Name: "Zig", Kind: "runtime",
+				Enabled: false,
+			},
+			{
+				Name: "Dart", Kind: "runtime",
+				Enabled: false,
+			},
+			{
+				Name: "Idris2", Kind: "runtime",
+				Enabled: false,
+			},
+			{
+				Name: "Lua", Kind: "runtime",
+				Enabled: false,
+			},
+			{
+				Name: "Ruby", Kind: "runtime",
+				Enabled: false,
+			},
+			{
+				Name: "Rust", Kind: "runtime",
+				Enabled: false,
+			},
+			{
+				Name: "Kotlin", Kind: "runtime",
+				Enabled: false,
+			},
+			{
+				Name: "Haskell", Kind: "runtime",
+				Enabled: false,
+			},
+			{
+				Name: "Elixir", Kind: "runtime",
+				Enabled: false,
+			},
+			{
+				Name: "Crystal", Kind: "runtime",
+				Enabled: false,
+			},
+			{
+				Name: "Scala", Kind: "runtime",
+				Enabled: false,
+			},
+			{
+				Name: "Swift", Kind: "runtime",
+				Enabled: false,
+			},
 		},
 		Vhosts: []Vhost{
 			{Domain: "myapp.test", DocRoot: "{base}/www/myapp", Port: 80, ServerType: "apache", Enabled: false},

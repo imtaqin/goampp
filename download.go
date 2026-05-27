@@ -805,6 +805,158 @@ var DownloadCatalog = map[string]DownloadSpec{
 		CheckFile:  "bin/java.exe",
 		Notes:      "Eclipse Temurin LTS — javac, java, jar all under bin/.",
 	},
+	"Julia": {
+		Version:    "1.11.5",
+		URL:        "https://julialang-s3.julialang.org/bin/winnt/x64/1.11/julia-1.11.5-win64.zip",
+		FileName:   "julia-1.11.5-win64.zip",
+		InstallDir: "bin/julia",
+		StripTop:   "julia-1.11.5/",
+		Kind:       "zip",
+		CheckFile:  "bin/julia.exe",
+		Notes:      "Julia — high-performance scientific computing language. REPL + package manager included.",
+	},
+	"Zig": {
+		Version:    "0.14.0",
+		URL:        "https://ziglang.org/download/0.14.0/zig-windows-x86_64-0.14.0.zip",
+		FileName:   "zig-windows-x86_64-0.14.0.zip",
+		InstallDir: "bin/zig",
+		StripTop:   "zig-windows-x86_64-0.14.0/",
+		Kind:       "zip",
+		CheckFile:  "zig.exe",
+		Notes:      "Zig — systems programming language + build system + C compiler.",
+	},
+	"Dart": {
+		Version:    "3.7.2",
+		URL:        "https://storage.googleapis.com/dart-archive/channels/stable/release/3.7.2/sdk/dartsdk-windows-x64-release.zip",
+		FileName:   "dartsdk-windows-x64-release.zip",
+		InstallDir: "bin/dart",
+		StripTop:   "dart-sdk/",
+		Kind:       "zip",
+		CheckFile:  "bin/dart.exe",
+		Notes:      "Dart SDK — optimised for client + server; use with Flutter.",
+	},
+	"Idris2": {
+		Version:    "nightly (main)",
+		URL:        "https://nightly.link/fdciabdul/Idris2/actions/runs/26355077230/idris2-main-windows-x86_64.zip",
+		FileName:   "idris2-main-windows-x86_64.zip",
+		InstallDir: "bin/idris2",
+		StripTop:   "",
+		Kind:       "zip",
+		CheckFile:  "idris2.exe",
+		Notes:      "Idris2 — dependently-typed functional programming language.",
+	},
+	"Lua": {
+		Version:    "5.4.7",
+		URL:        "https://iweb.dl.sourceforge.net/project/luabinaries/5.4.7/Tools%20Executables/lua-5.4.7_Win64_bin.zip",
+		FileName:   "lua-5.4.7_Win64_bin.zip",
+		InstallDir: "bin/lua",
+		StripTop:   "",
+		Kind:       "zip",
+		CheckFile:  "lua54.exe",
+		Notes:      "Lua 5.4 scripting language. Executable is lua54.exe.",
+	},
+	"Ruby": {
+		// RubyInstaller2 — NSIS silent install, supports /D= for custom install dir.
+		Version:    "3.4.4",
+		URL:        "https://github.com/oneclick/rubyinstaller2/releases/download/RubyInstaller-3.4.4-1/rubyinstaller-3.4.4-1-x64.exe",
+		FileName:   "rubyinstaller-3.4.4-1-x64.exe",
+		InstallDir: "bin/ruby",
+		Kind:       "exe",
+		CheckFile:  "bin/ruby.exe",
+		Notes:      "Ruby 3.4.4 via RubyInstaller2 — silent NSIS install.",
+	},
+	"Rust": {
+		// Rust installed via rustup-init.exe. We download the bootstrapper as
+		// a single file, then PostInstall runs it with RUSTUP_HOME + CARGO_HOME
+		// pointing inside our bin/rust/ tree so the toolchain stays portable.
+		Version:    "stable (via rustup)",
+		URL:        "https://static.rust-lang.org/rustup/dist/x86_64-pc-windows-msvc/rustup-init.exe",
+		FileName:   "rustup-init.exe",
+		InstallDir: "bin/rust",
+		Kind:       "file",
+		TargetFile: "rustup-init.exe",
+		CheckFile:  ".cargo/bin/cargo.exe",
+		Notes:      "Rust stable toolchain — cargo + rustc land in bin/rust/.cargo/bin/.",
+		PostInstall: func(installDir string, log func(string)) error {
+			rustupInit := filepath.Join(installDir, "rustup-init.exe")
+			if _, err := os.Stat(rustupInit); err != nil {
+				return fmt.Errorf("rustup-init.exe not found in %s", installDir)
+			}
+			log("  installing Rust stable via rustup (3–5 min first time)...")
+			cmd := exec.Command(rustupInit,
+				"-y",
+				"--no-modify-path",
+				"--default-toolchain", "stable",
+				"--profile", "default",
+			)
+			cmd.Env = append(os.Environ(),
+				"RUSTUP_HOME="+filepath.Join(installDir, ".rustup"),
+				"CARGO_HOME="+filepath.Join(installDir, ".cargo"),
+			)
+			cmd.SysProcAttr = &syscall.SysProcAttr{HideWindow: true, CreationFlags: 0x08000000}
+			if out, err := cmd.CombinedOutput(); err != nil {
+				log("  rustup output: " + strings.TrimSpace(string(out)))
+				return err
+			}
+			log("  Rust stable ready — cargo at bin/rust/.cargo/bin/cargo.exe")
+			return nil
+		},
+	},
+	"Kotlin": {
+		Version:    "2.1.21",
+		URL:        "https://github.com/JetBrains/kotlin/releases/download/v2.1.21/kotlin-compiler-2.1.21.zip",
+		FileName:   "kotlin-compiler-2.1.21.zip",
+		InstallDir: "bin/kotlin",
+		StripTop:   "kotlinc/",
+		Kind:       "zip",
+		CheckFile:  "bin/kotlinc.bat",
+		Notes:      "Kotlin compiler — requires Java (install Java card first).",
+	},
+	"Haskell": {
+		// GHC — the reference Haskell compiler. Large download (~570 MB).
+		Version:    "GHC 9.10.1",
+		URL:        "https://downloads.haskell.org/ghc/9.10.1/ghc-9.10.1-x86_64-unknown-mingw32.zip",
+		FileName:   "ghc-9.10.1-x86_64-unknown-mingw32.zip",
+		InstallDir: "bin/haskell",
+		StripTop:   "ghc-9.10.1/",
+		Kind:       "zip",
+		CheckFile:  "bin/ghc.exe",
+		Notes:      "GHC 9.10.1 — Glasgow Haskell Compiler. Large download (~570 MB).",
+	},
+	"Elixir": {
+		// Pre-compiled Elixir for OTP 27. Archive is flat — bin/elixir.bat etc.
+		// at the root. Requires Erlang OTP 27 (install the Erlang card first).
+		Version:    "1.18.3 (OTP 27)",
+		URL:        "https://github.com/elixir-lang/elixir/releases/download/v1.18.3/elixir-otp-27.zip",
+		FileName:   "elixir-otp-27.zip",
+		InstallDir: "bin/elixir",
+		StripTop:   "",
+		Kind:       "zip",
+		CheckFile:  "bin/elixir.bat",
+		Notes:      "Elixir 1.18.3 — requires Erlang OTP 27 (install Erlang card first).",
+	},
+	"Crystal": {
+		// Experimental Windows support — marked unsupported by the Crystal team
+		// but generally works for basic CLI usage and compilation.
+		Version:    "1.15.1",
+		URL:        "https://github.com/crystal-lang/crystal/releases/download/1.15.1/crystal-1.15.1-windows-x86_64-msvc-unsupported.zip",
+		FileName:   "crystal-1.15.1-windows-x86_64-msvc-unsupported.zip",
+		InstallDir: "bin/crystal",
+		StripTop:   "crystal-1.15.1-windows-x86_64-msvc-unsupported/",
+		Kind:       "zip",
+		CheckFile:  "crystal.exe",
+		Notes:      "Crystal 1.15.1 — experimental Windows build; statically-typed Ruby-like language.",
+	},
+	"Scala": {
+		Version:    "2.13.16",
+		URL:        "https://downloads.lightbend.com/scala/2.13.16/scala-2.13.16.zip",
+		FileName:   "scala-2.13.16.zip",
+		InstallDir: "bin/scala",
+		StripTop:   "scala-2.13.16/",
+		Kind:       "zip",
+		CheckFile:  "bin/scala.bat",
+		Notes:      "Scala 2.13 LTS — requires Java (install Java card first).",
+	},
 
 	// ----- Storage, messaging & queues -----
 

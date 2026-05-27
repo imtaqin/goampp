@@ -39,18 +39,35 @@ func goamppPathDirs() []string {
 	}
 	candidates := []string{
 		// Web stack
-		join("bin", "apache", "bin"),     // httpd
-		join("bin", "nginx"),             // nginx.exe
-		join("bin", "php"),                // php.exe + composer.phar
-		join("bin", "mysql", "bin"),      // mysqld, mysql, mysqldump
-		join("bin", "pgsql", "bin"),      // postgres, psql, pg_dump
-		join("bin", "redis"),             // redis-server, redis-cli
+		join("bin", "apache", "bin"),        // httpd
+		join("bin", "nginx"),                // nginx.exe
+		join("bin", "php"),                  // php.exe + php-cgi.exe
+		join("bin", "mysql", "bin"),         // mysqld, mysql, mysqldump
+		join("bin", "pgsql", "bin"),         // postgres, psql, pg_dump
+		join("bin", "redis"),                // redis-server, redis-cli
+		// Tools
+		join("bin", "pgweb"),                // pgweb.exe
+		join("bin", "minio"),                // minio.exe
+		join("bin", "mailpit"),              // mailpit.exe
 		// Language runtimes
-		join("bin", "node"),              // node, npm, npx
-		join("bin", "python"),            // python
-		join("bin", "python", "Scripts"), // pip, pipx
-		join("bin", "go", "bin"),         // go, gofmt
-		join("bin", "java", "bin"),       // java, javac, jar
+		join("bin", "node"),                 // node, npm, npx
+		join("bin", "python"),               // python.exe
+		join("bin", "python", "Scripts"),    // pip, pipx
+		join("bin", "go", "bin"),            // go, gofmt
+		join("bin", "java", "bin"),          // java, javac, jar
+		join("bin", "julia", "bin"),         // julia.exe
+		join("bin", "zig"),                  // zig.exe (flat archive)
+		join("bin", "dart", "bin"),          // dart.exe
+		join("bin", "idris2"),               // idris2.exe (flat archive)
+		join("bin", "lua"),                  // lua54.exe
+		join("bin", "ruby", "bin"),          // ruby.exe, gem, irb
+		join("bin", "rust", ".cargo", "bin"),// cargo.exe, rustc.exe, rustup.exe
+		join("bin", "kotlin", "bin"),        // kotlinc.bat
+		join("bin", "haskell", "bin"),       // ghc.exe, runghc.exe, ghci.exe
+		join("bin", "elixir", "bin"),        // elixir.bat, iex.bat, mix.bat
+		join("bin", "crystal"),              // crystal.exe (flat archive)
+		join("bin", "scala", "bin"),         // scala.bat, scalac.bat
+		join("bin", "erlang", "bin"),        // erl.exe, escript.exe
 	}
 	out := make([]string, 0, len(candidates))
 	for _, d := range candidates {

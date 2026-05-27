@@ -25,7 +25,6 @@ const (
 	// 3 buttons (Start / Conf / Ver) without crowding instead of
 	// the previous 195px squeeze where labels overlapped.
 	winW = 1100
-	winH = 630
 
 	// Sidebar (left column of nav buttons).
 	sideX = 10
@@ -38,18 +37,50 @@ const (
 	contentX = 130
 	contentY = 48
 	contentW = 960
-	contentH = 368
 
 	// Download progress strip — sits 8px below the content area.
-	progY = 424
 	progH = 18
 
 	// Log panel — full width minus 10px margin each side.
 	logX = 10
-	logY = 450
 	logW = 1080
-	logH = 140
+	logH = 90
+
+	// Services page sub-tab strip (inside the content area).
+	svcTabBtnW   = 84  // width of each tab button
+	svcTabBtnH   = 24  // height
+	svcTabStripY = 36  // Y within the services page container
+	cardGridY    = 64  // Y where card grid starts (below action row + tab strip)
 )
+
+// Dynamic layout values — computed by computeLayout() from service count.
+// Must be set before ui.NewMain is called.
+var (
+	contentH int // height of the page container
+	progY    int // Y of the download progress strip
+	logY     int // Y of the log panel
+	winH     int // total window height
+)
+
+// computeLayout calculates window and content geometry from the number of
+// services in app.services so the card grid always fits without clipping.
+// Call this once after app.services is populated, before building the UI.
+func computeLayout() {
+	ncols := (contentW + cardGap) / (cardW + cardGap)
+	if ncols < 1 {
+		ncols = 1
+	}
+	nrows := (len(app.services) + ncols - 1) / ncols
+	if nrows < 2 {
+		nrows = 2 // show at least 2 rows even with few services
+	}
+	// cardGridY = top action row (40px) + tab strip (24px) + gap (4px)
+	// 16px = bottom padding inside content area
+	contentH = cardGridY + nrows*(cardH+cardGap) - cardGap + 16
+	progY = contentY + contentH + 8
+	logY = progY + progH + 8
+	winH = logY + logH + 40
+}
 
 // ----- Page container tracking ------------------------------------------
 
@@ -423,14 +454,14 @@ func showPage(key string) {
 // refreshServiceList can update text + button labels in place
 // without rebuilding the whole grid.
 type serviceCard struct {
-	srcIdx     int        // index into app.services
-	iconStatic *ui.Static // SS_ICON, set via STM_SETICON
+	srcIdx     int         // index into app.services
+	cardCtrl   *ui.Control // card-level container HWND; moved/hidden for tab switching
+	iconStatic *ui.Static  // SS_ICON, set via STM_SETICON
 	nameStatic *ui.Static
 	statusLbl  *ui.Static
 	versionLbl *ui.Static
-	// rect is the card's bounding box in page-client coords. Used by
-	// the right-click context-menu hit test to identify which card
-	// the user clicked when picking a version.
+	// rect is the card's bounding box in services-page client coords.
+	// Updated by switchSvcTab when cards are repositioned.
 	rect win.RECT
 
 	// One toggle button replaces the old Start/Stop pair: its label
@@ -578,6 +609,27 @@ func isWebKindCard(c *serviceCard) bool {
 // Built once at WM_CREATE; updated by refreshServiceList.
 var serviceCards []*serviceCard
 
+// svcTabGroup defines one entry in the Services-page tab strip.
+type svcTabGroup struct {
+	label  string
+	groups []int32 // nil = show all categories
+}
+
+// svcTabGroups is the ordered list of sub-tabs shown inside the Services page.
+var svcTabGroups = []svcTabGroup{
+	{"All",      nil},
+	{"Web",      []int32{groupWeb}},
+	{"Database", []int32{groupDatabase}},
+	{"Language", []int32{groupLanguage}},
+	{"Tools",    []int32{groupTool}},
+}
+
+var (
+	activeSvcTabIdx int          // index into svcTabGroups
+	svcTabBtns      []*ui.Button // one per svcTabGroups entry
+	svcTabParent    *ui.Control  // services page container (for repaints)
+)
+
 // Per-card geometry. Bumped 195→228 wide so the 3-button row
 // (Start/Stop · Conf · Ver ▾) reads cleanly without truncated
 // labels. 4 cards + 3 gaps + 2 padding = 228×4 + 8×3 + 10×2 = 936
@@ -700,32 +752,52 @@ func buildServicesPage(parent *ui.Control) {
 		refreshServiceList()
 	})
 
-	// ----- Card grid (no section headers — group order is enough) ----
-	// Cards flow left-to-right, top-to-bottom in category order. The
-	// adjacency itself groups them visually; an explicit header row
-	// per category just adds noise when the cards are already only
-	// 84px tall and the icons make the type obvious.
+	// ----- Sub-tab strip (Web / Database / Language / Tools / All) ----
+	svcTabParent = parent
+	svcTabBtns = svcTabBtns[:0] // reset on rebuild
+	tabX := 10
+	for i, tg := range svcTabGroups {
+		i, tg := i, tg
+		scheme := SchemeSidebar
+		if i == 0 {
+			scheme = SchemePrimary // "All" starts active
+		}
+		btn := newColoredButton(parent, ui.OptsButton().
+			Text(tg.label).
+			Position(ui.Dpi(tabX, svcTabStripY)).
+			Width(ui.DpiX(svcTabBtnW)).Height(ui.DpiY(svcTabBtnH)),
+			scheme)
+		btn.On().BnClicked(func() { switchSvcTab(i) })
+		svcTabBtns = append(svcTabBtns, btn)
+		tabX += svcTabBtnW + 4
+	}
+
+	// ----- Card grid ------------------------------------------------
+	// Cards flow left-to-right, top-to-bottom in category order.
+	// ncols computed from available width so adding services adds rows.
+	ncols := (contentW + cardGap) / (cardW + cardGap)
+	if ncols < 1 {
+		ncols = 1
+	}
+
 	categoryOrder := []int32{groupWeb, groupDatabase, groupLanguage, groupTool}
 	gridX := 10
-	y := 40 // below the top action row (web picker + Start Stack/Stop/Restart)
 	pos := 0
 	for _, wantGroup := range categoryOrder {
 		for srcIdx, ms := range app.services {
 			if groupForKind(ms.Conf.Kind) != wantGroup {
 				continue
 			}
-			col := pos % 4
-			row := pos / 4
+			col := pos % ncols
+			row := pos / ncols
 			x := gridX + col*(cardW+cardGap)
-			cy := y + row*(cardH+cardGap)
+			cy := cardGridY + row*(cardH+cardGap)
 			card := buildServiceCard(parent, x, cy, srcIdx, ms)
 			serviceCards = append(serviceCards, card)
 			pos++
 		}
 	}
 	_ = pos
-	// (Bottom action buttons moved to the top row alongside the
-	// Active Web Server picker — see addStackBtn above.)
 }
 
 // buildServiceCard creates the widgets for one service tile at the
@@ -752,62 +824,59 @@ func buildServiceCard(parent *ui.Control, x, y, srcIdx int, ms *ManagedService) 
 		},
 	}
 
-	// Background border — a Static styled SS_ETCHEDFRAME draws a
-	// thin sunken outline so the cards visually separate from the
-	// page background. Sized to enclose all the inner widgets.
-	ui.NewStatic(parent, ui.OptsStatic().
-		Text("").
+	// Card-level container — all child widgets live inside this
+	// Control so that switching tabs can hide/move the whole card
+	// with a single SetWindowPos / ShowWindow call.
+	c.cardCtrl = ui.NewControl(parent, ui.OptsControl().
 		Position(ui.Dpi(x, y)).
+		Size(ui.Dpi(cardW, cardH)).
+		ExStyle(co.WS_EX_LEFT).
+		ClassBrush(windowBgBrush()))
+	c.cardCtrl.On().WmDrawItem(handleDrawItem)
+	c.cardCtrl.On().WmCtlColorStatic(staticBgHandler)
+
+	// All child positions are now relative to (0, 0) inside cardCtrl.
+	cc := c.cardCtrl // shorthand
+
+	// Background border — SS_ETCHEDFRAME outlines the card.
+	ui.NewStatic(cc, ui.OptsStatic().
+		Text("").
+		Position(ui.Dpi(0, 0)).
 		Size(ui.Dpi(cardW, cardH)).
 		CtrlStyle(co.SS_ETCHEDFRAME))
 
-	// Icon — SS_ICON Static. STM_SETICON gets the actual HICON
-	// pointer in installServiceIcons (which already loads icons
-	// into HIMAGELISTs; we extract the HICON via ImageList_GetIcon
-	// in setCardIcon below).
-	c.iconStatic = ui.NewStatic(parent, ui.OptsStatic().
+	c.iconStatic = ui.NewStatic(cc, ui.OptsStatic().
 		Text("").
-		Position(ui.Dpi(x+8, y+8)).
+		Position(ui.Dpi(8, 8)).
 		Size(ui.Dpi(32, 32)).
 		CtrlStyle(co.SS_ICON|co.SS_REALSIZECONTROL))
 
-	// Status dot — sits left of the name. Glyph swaps reflect state
-	// (●/○/·); colour comes from the global static text rule.
-	c.statusDot = ui.NewStatic(parent, ui.OptsStatic().
+	c.statusDot = ui.NewStatic(cc, ui.OptsStatic().
 		Text("●").
-		Position(ui.Dpi(x+44, y+10)).
+		Position(ui.Dpi(44, 10)).
 		Size(ui.Dpi(12, 14)))
 
-	// Name — the dominant text on the card.
-	c.nameStatic = ui.NewStatic(parent, ui.OptsStatic().
+	c.nameStatic = ui.NewStatic(cc, ui.OptsStatic().
 		Text(ms.Conf.Name).
-		Position(ui.Dpi(x+58, y+10)).
+		Position(ui.Dpi(58, 10)).
 		Size(ui.Dpi(cardW-66, 16)))
 
-	// Status — single short line; merges port info, no separate
-	// version row (we tuck the version into the name on refresh).
-	c.statusLbl = ui.NewStatic(parent, ui.OptsStatic().
+	c.statusLbl = ui.NewStatic(cc, ui.OptsStatic().
 		Text("...").
-		Position(ui.Dpi(x+48, y+28)).
+		Position(ui.Dpi(48, 28)).
 		Size(ui.Dpi(cardW-56, 14)))
 
-	// versionLbl is unused on the simplified card but kept on the
-	// struct so refreshServiceList doesn't need a separate code
-	// path for old vs new layout. Hidden by setting empty text +
-	// zero-height position (off the visible area).
-	c.versionLbl = ui.NewStatic(parent, ui.OptsStatic().
+	c.versionLbl = ui.NewStatic(cc, ui.OptsStatic().
 		Text("").
-		Position(ui.Dpi(x+48, y+cardH)).
+		Position(ui.Dpi(48, cardH)).
 		Size(ui.Dpi(1, 1)))
 
-	// Button row — just two buttons now: Start/Stop toggle and
-	// Conf. Restart is redundant with Stop+Start and was clutter.
-	btnRowY := y + cardH - 28
+	btnRowY := cardH - 28
 	idx := srcIdx
 
-	c.btnToggle = newColoredButton(parent, ui.OptsButton().
+	c.btnToggle = newColoredButton(cc, ui.OptsButton().
 		Text("▶ Start").
-		Position(ui.Dpi(x+8, btnRowY)).
+		Position(ui.Dpi(8, btnRowY)).
 		Width(ui.DpiX(96)).Height(ui.DpiY(22)),
 		SchemeSuccess)
 	c.btnToggle.On().BnClicked(func() {
@@ -825,14 +894,10 @@ func buildServiceCard(parent *ui.Control, x, y, srcIdx int, ms *ManagedService) 
 		startService(idx)
 	})
 
-	// btnRestart kept on the struct (refreshServiceList still
-	// references it on legacy cards) but rendered off-card so the
-	// simplified layout doesn't show it. Setting size 0×0 + position
-	// outside the card is the cheapest way to "remove" without
-	// rippling through every refresh path.
-	c.btnRestart = newColoredButton(parent, ui.OptsButton().
+	// btnRestart kept on struct but rendered off-card (outside bounds).
+	c.btnRestart = newColoredButton(cc, ui.OptsButton().
 		Text("").
-		Position(ui.Dpi(x+cardW+100, y+cardH+100)).
+		Position(ui.Dpi(cardW+100, cardH+100)).
 		Width(ui.DpiX(1)).Height(ui.DpiY(1)),
 		SchemeWarning)
 	c.btnRestart.On().BnClicked(func() {
@@ -849,37 +914,26 @@ func buildServiceCard(parent *ui.Control, x, y, srcIdx int, ms *ManagedService) 
 		}(s)
 	})
 
-	// Layout split depending on whether this service has multiple
-	// versions in the catalogue. Multi-version cards get a visible
-	// "Version ▾" button taking the place of width on the right.
 	hasVariants := false
 	if spec, ok := DownloadCatalog[ms.Conf.Name]; ok && len(spec.Variants) > 0 {
 		hasVariants = true
 	}
 
 	if hasVariants {
-		// 3 buttons in a 228-wide card:
-		//   toggle (96) + Conf (52) + Ver ▾ (60)
-		//   8 padding + 96 + 6 gap + 52 + 6 gap + 60 + 8 padding = 236
-		//   (cards have a slight overflow margin since gaps are 6 not 8 here)
-		// Resize the toggle button (originally created at width 96 in
-		// the buildServiceCard prologue) — same width here, just keep
-		// it explicit so a future card-width tweak only needs to touch
-		// this block.
-		px, py := ui.Dpi(x+8, btnRowY)
+		px, py := ui.Dpi(8, btnRowY)
 		c.btnToggle.Hwnd().SetWindowPos(win.HWND(0),
 			win.POINT{X: int32(px), Y: int32(py)},
 			win.SIZE{Cx: int32(ui.DpiX(96)), Cy: int32(ui.DpiY(22))},
 			co.SWP_NOZORDER)
-		c.btnConf = newColoredButton(parent, ui.OptsButton().
+		c.btnConf = newColoredButton(cc, ui.OptsButton().
 			Text("Conf").
-			Position(ui.Dpi(x+110, btnRowY)).
+			Position(ui.Dpi(110, btnRowY)).
 			Width(ui.DpiX(52)).Height(ui.DpiY(22)),
 			SchemePrimary)
 		card := c
-		c.btnVer = newColoredButton(parent, ui.OptsButton().
+		c.btnVer = newColoredButton(cc, ui.OptsButton().
 			Text("Ver ▾").
-			Position(ui.Dpi(x+168, btnRowY)).
+			Position(ui.Dpi(168, btnRowY)).
 			Width(ui.DpiX(52)).Height(ui.DpiY(22)),
 			SchemeWarning)
 		c.btnVer.On().BnClicked(func() {
@@ -891,22 +945,34 @@ func buildServiceCard(parent *ui.Control, x, y, srcIdx int, ms *ManagedService) 
 			showVersionMenuForCard(card, pt)
 		})
 	} else {
-		// Single-version services: just toggle + Conf with comfy
-		// widths in the wider card.
-		// 8 padding + 130 + 8 gap + 74 + 8 padding = 228 ✓
-		px, py := ui.Dpi(x+8, btnRowY)
+		isRuntime := strings.ToLower(ms.Conf.Kind) == "runtime"
+		px, py := ui.Dpi(8, btnRowY)
 		c.btnToggle.Hwnd().SetWindowPos(win.HWND(0),
 			win.POINT{X: int32(px), Y: int32(py)},
 			win.SIZE{Cx: int32(ui.DpiX(130)), Cy: int32(ui.DpiY(22))},
 			co.SWP_NOZORDER)
-		c.btnConf = newColoredButton(parent, ui.OptsButton().
-			Text("Conf").
-			Position(ui.Dpi(x+146, btnRowY)).
-			Width(ui.DpiX(74)).Height(ui.DpiY(22)),
-			SchemePrimary)
+		if isRuntime {
+			c.btnConf = newColoredButton(cc, ui.OptsButton().
+				Text("⌨ Term").
+				Position(ui.Dpi(146, btnRowY)).
+				Width(ui.DpiX(74)).Height(ui.DpiY(22)),
+				SchemeSidebar)
+		} else {
+			c.btnConf = newColoredButton(cc, ui.OptsButton().
+				Text("Conf").
+				Position(ui.Dpi(146, btnRowY)).
+				Width(ui.DpiX(74)).Height(ui.DpiY(22)),
+				SchemePrimary)
+		}
 	}
 	c.btnConf.On().BnClicked(func() {
 		ms := app.services[idx]
+		// Runtime cards: "⌨ Term" opens a ConEmu session with the
+		// language's bin dir prepended to PATH.
+		if strings.ToLower(ms.Conf.Kind) == "runtime" {
+			openTerminalForService(ms.Conf.Name)
+			return
+		}
 		if ms.Conf.ConfigFile == "" {
 			// Fall back to "Open URL" for tool-only entries
 			// (phpMyAdmin/Adminer) so the Conf button isn't
@@ -923,6 +989,141 @@ func buildServiceCard(parent *ui.Control, x, y, srcIdx int, ms *ManagedService) 
 	})
 
 	return c
+}
+
+// langBinDirs maps a runtime service name to the bin directories
+// (relative to baseDir) that must be on PATH for the language to work.
+var langBinDirs = map[string][]string{
+	"Node.js":  {"bin/node"},
+	"Python":   {"bin/python", "bin/python/Scripts"},
+	"Go":       {"bin/go/bin"},
+	"Java":     {"bin/java/bin"},
+	"Julia":    {"bin/julia/bin"},
+	"Zig":      {"bin/zig"},
+	"Dart":     {"bin/dart/bin"},
+	"Idris2":   {"bin/idris2"},
+	"Lua":      {"bin/lua"},
+	"Ruby":     {"bin/ruby/bin"},
+	"Rust":     {"bin/rust/.cargo/bin"},
+	"Kotlin":   {"bin/kotlin/bin"},
+	"Haskell":  {"bin/haskell/bin"},
+	"Elixir":   {"bin/elixir/bin", "bin/erlang/bin"},
+	"Crystal":  {"bin/crystal"},
+	"Scala":    {"bin/scala/bin"},
+	"Erlang":   {"bin/erlang/bin"},
+	"Swift":    {},
+}
+
+// openTerminalForService launches ConEmu64.exe (from the installer/
+// directory) with a cmd.exe shell whose PATH has the runtime's bin dir
+// prepended so the language is immediately usable. Falls back to a
+// plain cmd.exe window if ConEmu is not present.
+func openTerminalForService(name string) {
+	conEmu := filepath.Join(app.baseDir, "installer", "ConEmu64.exe")
+
+	// Resolve relative bin dirs to absolute paths.
+	relDirs := langBinDirs[name]
+	var prepend []string
+	for _, rel := range relDirs {
+		prepend = append(prepend, filepath.Join(app.baseDir, filepath.FromSlash(rel)))
+	}
+
+	// Clone environment, injecting extra dirs at the front of PATH.
+	env := os.Environ()
+	for i, e := range env {
+		if strings.HasPrefix(strings.ToUpper(e), "PATH=") {
+			existing := e[5:]
+			all := append(prepend, existing)
+			env[i] = "PATH=" + strings.Join(all, ";")
+			break
+		}
+	}
+	// Also set GOAMPP_BASE so scripts can reference it.
+	env = append(env, "GOAMPP_BASE="+app.baseDir)
+
+	if _, err := os.Stat(conEmu); err != nil {
+		// ConEmu not found — open a plain cmd.exe console.
+		cmd := exec.Command("cmd.exe")
+		cmd.Env = env
+		cmd.SysProcAttr = &syscall.SysProcAttr{CreationFlags: 0x00000010} // CREATE_NEW_CONSOLE
+		_ = cmd.Start()
+		return
+	}
+
+	title := "GoAMPP — " + name
+	cmd := exec.Command(conEmu, "/Title", title, "/cmd", "cmd.exe")
+	cmd.Env = env
+	_ = cmd.Start()
+}
+
+// switchSvcTab shows/hides and repositions card containers to match the
+// selected sub-tab. idx is an index into svcTabGroups.
+func switchSvcTab(idx int) {
+	if idx == activeSvcTabIdx && idx != 0 {
+		return // already on this tab
+	}
+	activeSvcTabIdx = idx
+	targetGroups := svcTabGroups[idx].groups
+
+	ncols := (contentW + cardGap) / (cardW + cardGap)
+	if ncols < 1 {
+		ncols = 1
+	}
+
+	pos := 0
+	for _, c := range serviceCards {
+		ms := app.services[c.srcIdx]
+		group := groupForKind(ms.Conf.Kind)
+		visible := len(targetGroups) == 0 || containsInt32(targetGroups, group)
+
+		if !visible {
+			c.cardCtrl.Hwnd().ShowWindow(co.SW_HIDE)
+			continue
+		}
+
+		col := pos % ncols
+		row := pos / ncols
+		newX := 10 + col*(cardW+cardGap)
+		newY := cardGridY + row*(cardH+cardGap)
+		px, py := ui.Dpi(newX, newY)
+		c.cardCtrl.Hwnd().SetWindowPos(win.HWND(0),
+			win.POINT{X: int32(px), Y: int32(py)},
+			win.SIZE{},
+			co.SWP_NOZORDER|co.SWP_NOSIZE|co.SWP_NOACTIVATE)
+		c.cardCtrl.Hwnd().ShowWindow(co.SW_SHOWNA)
+		// Keep rect in page-client coords for hit test.
+		c.rect = win.RECT{
+			Left: int32(newX), Top: int32(newY),
+			Right: int32(newX + cardW), Bottom: int32(newY + cardH),
+		}
+		pos++
+	}
+
+	// Update tab button highlight: active = Primary, others = Sidebar.
+	for i, btn := range svcTabBtns {
+		scheme := SchemeSidebar
+		if i == idx {
+			scheme = SchemePrimary
+		}
+		buttonSchemes[btn.CtrlId()] = scheme
+		btn.Hwnd().InvalidateRect(nil, true)
+	}
+
+	// Force full repaint of the services page to clear stale pixels.
+	if svcTabParent != nil {
+		svcTabParent.Hwnd().RedrawWindow(nil, 0,
+			co.RDW_INVALIDATE|co.RDW_ERASE|co.RDW_ALLCHILDREN|co.RDW_UPDATENOW)
+	}
+}
+
+// containsInt32 reports whether val is in slice.
+func containsInt32(slice []int32, val int32) bool {
+	for _, v := range slice {
+		if v == val {
+			return true
+		}
+	}
+	return false
 }
 
 // refreshServiceList walks every card and re-syncs its labels +

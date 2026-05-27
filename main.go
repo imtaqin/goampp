@@ -102,6 +102,10 @@ func main() {
 		app.services = append(app.services, ms)
 	}
 
+	// Compute window/content geometry from service count so the card grid
+	// always fits. Must run before ui.NewMain so winH is correct.
+	computeLayout()
+
 	// Housekeeping: nuke any stale child processes left over from a
 	// prior crash. Stray httpd.exe / mariadbd.exe workers would keep
 	// holding their ports and make the next Start fail with a cryptic
@@ -191,7 +195,7 @@ func main() {
 		ui.OptsStatusBar().
 			FixedPart(ui.DpiX(220), "Ready").
 			FlexPart(1, truncateMid(baseDir, 70)).
-			FixedPart(ui.DpiX(90), "GoAMPP v0.3"),
+			FixedPart(ui.DpiX(90), "GoAMPP v0.6"),
 	)
 
 	// Windows 11 visual tweaks + callback wiring must happen after the

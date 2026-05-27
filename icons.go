@@ -45,6 +45,20 @@ var serviceIconFiles = map[string]string{
 	"Python":     "python.ico",
 	"Go":         "go.ico",
 	"Java":       "java.ico",
+	"Erlang":     "erlang.ico",
+	"Julia":      "julia.ico",
+	"Zig":        "zig.ico",
+	"Dart":       "dart.ico",
+	"Idris2":     "idris2.ico",
+	"Lua":        "lua.ico",
+	"Ruby":       "ruby.ico",
+	"Rust":       "rust.ico",
+	"Kotlin":     "kotlin.ico",
+	"Haskell":    "haskell.ico",
+	"Elixir":     "elixir.ico",
+	"Crystal":    "crystal.ico",
+	"Scala":      "scala.ico",
+	"Swift":      "swift.ico",
 }
 
 // iconState holds the per-service HICONs we hand to the card

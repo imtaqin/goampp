@@ -99,7 +99,7 @@ var logos = []logo{
 	{
 		service:     "pgweb",
 		localName:   "pgweb",
-		fallbackURL: "https://raw.githubusercontent.com/sosedoff/pgweb/master/static/favicon.png",
+		fallbackURL: "https://raw.githubusercontent.com/sosedoff/pgweb/master/static/img/favicon.png",
 		outName:     "pgweb.ico",
 	},
 	{
@@ -131,11 +131,95 @@ var logos = []logo{
 	{
 		service:     "WordPress",
 		localName:   "WordPress",
-		fallbackURL: "https://upload.wikimedia.org/wikipedia/commons/thumb/9/98/WordPress_blue_logo.svg/512px-WordPress_blue_logo.svg.png",
+		fallbackURL: "https://s.w.org/style/images/wp-header-logo.png",
 		outName:     "wordpress.ico",
 	},
 
 	// ----- Runtimes (language / platform) -----
+	{
+		service:     "Erlang",
+		localName:   "erlang",
+		fallbackURL: "https://icon.icepanel.io/Technology/png-shadow-512/Erlang.png",
+		outName:     "erlang.ico",
+	},
+	{
+		service:     "Julia",
+		localName:   "julia",
+		fallbackURL: "https://icon.icepanel.io/Technology/png-shadow-512/Julia.png",
+		outName:     "julia.ico",
+	},
+	{
+		service:     "Zig",
+		localName:   "Zig",
+		fallbackURL: "https://icon.icepanel.io/Technology/png-shadow-512/Zig.png",
+		outName:     "zig.ico",
+	},
+	{
+		service:     "Dart",
+		localName:   "Dart",
+		fallbackURL: "https://icon.icepanel.io/Technology/png-shadow-512/Dart.png",
+		outName:     "dart.ico",
+	},
+	{
+		service:     "Idris2",
+		localName:   "idris2",
+		fallbackURL: "https://icon.icepanel.io/Technology/png-shadow-512/Idris2.png",
+		outName:     "idris2.ico",
+	},
+	{
+		service:     "Lua",
+		localName:   "Lua",
+		fallbackURL: "https://icon.icepanel.io/Technology/png-shadow-512/Lua.png",
+		outName:     "lua.ico",
+	},
+	{
+		service:     "Ruby",
+		localName:   "Ruby",
+		fallbackURL: "https://icon.icepanel.io/Technology/png-shadow-512/Ruby.png",
+		outName:     "ruby.ico",
+	},
+	{
+		service:     "Rust",
+		localName:   "Rust",
+		fallbackURL: "https://icon.icepanel.io/Technology/png-shadow-512/Rust.png",
+		outName:     "rust.ico",
+	},
+	{
+		service:     "Kotlin",
+		localName:   "Kotlin",
+		fallbackURL: "https://icon.icepanel.io/Technology/png-shadow-512/Kotlin.png",
+		outName:     "kotlin.ico",
+	},
+	{
+		service:     "Haskell",
+		localName:   "Haskell",
+		fallbackURL: "https://icon.icepanel.io/Technology/png-shadow-512/Haskell.png",
+		outName:     "haskell.ico",
+	},
+	{
+		service:     "Elixir",
+		localName:   "Elixir",
+		fallbackURL: "https://icon.icepanel.io/Technology/png-shadow-512/Elixir.png",
+		outName:     "elixir.ico",
+	},
+	{
+		service:     "Crystal",
+		localName:   "Crystal",
+		fallbackURL: "https://icon.icepanel.io/Technology/png-shadow-512/Crystal.png",
+		outName:     "crystal.ico",
+	},
+	{
+		service:     "Scala",
+		localName:   "Scala",
+		fallbackURL: "https://icon.icepanel.io/Technology/png-shadow-512/Scala.png",
+		outName:     "scala.ico",
+	},
+	{
+		service:     "Swift",
+		localName:   "Swift",
+		fallbackURL: "https://icon.icepanel.io/Technology/png-shadow-512/Swift.png",
+		outName:     "swift.ico",
+	},
 	{
 		service:     "Node.js",
 		localName:   "Node.js",
