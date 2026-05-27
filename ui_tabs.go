@@ -1001,7 +1001,7 @@ var langBinDirs = map[string][]string{
 	"Julia":    {"bin/julia/bin"},
 	"Zig":      {"bin/zig"},
 	"Dart":     {"bin/dart/bin"},
-	"Idris2":   {"bin/idris2"},
+	"Idris2":   {"bin/idris2/bin"},
 	"Lua":      {"bin/lua"},
 	"Ruby":     {"bin/ruby/bin"},
 	"Rust":     {"bin/rust/.cargo/bin"},

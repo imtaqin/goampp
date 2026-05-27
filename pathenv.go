@@ -58,7 +58,7 @@ func goamppPathDirs() []string {
 		join("bin", "julia", "bin"),         // julia.exe
 		join("bin", "zig"),                  // zig.exe (flat archive)
 		join("bin", "dart", "bin"),          // dart.exe
-		join("bin", "idris2"),               // idris2.exe (flat archive)
+		join("bin", "idris2", "bin"),         // idris2.cmd
 		join("bin", "lua"),                  // lua54.exe
 		join("bin", "ruby", "bin"),          // ruby.exe, gem, irb
 		join("bin", "rust", ".cargo", "bin"),// cargo.exe, rustc.exe, rustup.exe

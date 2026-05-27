@@ -836,14 +836,48 @@ var DownloadCatalog = map[string]DownloadSpec{
 		Notes:      "Dart SDK — optimised for client + server; use with Flutter.",
 	},
 	"Idris2": {
-		Version:    "nightly (main)",
+		// nightly.link wraps the GitHub Actions artifact in an outer ZIP.
+		// The outer ZIP contains one file: the real artifact ZIP which in turn
+		// has a top-level "idris2-main-windows-x86_64/" prefix. PostInstall
+		// finds the inner ZIP, strips the prefix, and extracts flat into installDir.
+		// The real launcher is bin/idris2.cmd (Windows CMD wrapper around the
+		// ELF-style "bin/idris2" binary that Chez Scheme runs).
+		Version:    "0.8.0 nightly",
 		URL:        "https://nightly.link/fdciabdul/Idris2/actions/runs/26355077230/idris2-main-windows-x86_64.zip",
 		FileName:   "idris2-main-windows-x86_64.zip",
 		InstallDir: "bin/idris2",
 		StripTop:   "",
 		Kind:       "zip",
-		CheckFile:  "idris2.exe",
-		Notes:      "Idris2 — dependently-typed functional programming language.",
+		CheckFile:  "bin/idris2.cmd",
+		Notes:      "Idris2 0.8.0 — dependently-typed functional language. Requires Chez Scheme (bundled).",
+		PostInstall: func(installDir string, log func(string)) error {
+			// Already extracted? idempotent check.
+			if _, err := os.Stat(filepath.Join(installDir, "bin", "idris2.cmd")); err == nil {
+				return nil
+			}
+			// Find the inner zip dropped by the outer nightly.link wrapper.
+			entries, err := os.ReadDir(installDir)
+			if err != nil {
+				return fmt.Errorf("read idris2 dir: %w", err)
+			}
+			for _, e := range entries {
+				if e.IsDir() || !strings.HasSuffix(strings.ToLower(e.Name()), ".zip") {
+					continue
+				}
+				innerZip := filepath.Join(installDir, e.Name())
+				// Strip the top-level "idris2-main-windows-x86_64/" prefix so
+				// bin/, lib/, etc. land directly in installDir.
+				stripPrefix := strings.TrimSuffix(e.Name(), ".zip") + "/"
+				log("  extracting inner zip (strip: " + stripPrefix + ")")
+				if err := extractZip(innerZip, installDir, stripPrefix, nil); err != nil {
+					return fmt.Errorf("extract inner zip: %w", err)
+				}
+				_ = os.Remove(innerZip)
+				log("  Idris2 ready — launcher at bin/idris2.cmd")
+				break
+			}
+			return nil
+		},
 	},
 	"Lua": {
 		Version:    "5.4.7",
