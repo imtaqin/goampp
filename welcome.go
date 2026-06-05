@@ -10,47 +10,8 @@ import (
 	"strings"
 )
 
-// welcome.go — embedded default landing page + phpinfo shortcut for
-// http://localhost/, plus the self-heal helper that ensures Apache's
-// runtime-state files exist on every GoAMPP launch.
-//
-// Why self-heal instead of just doing this in PostInstall: users who
-// upgrade GoAMPP across versions keep the same bin/apache/ tree from
-// their previous install. DownloadAndInstall short-circuits when the
-// CheckFile (bin/httpd.exe) is already present, which means the
-// PostInstall hook never runs on upgrades. Without a separate
-// runtime check, a v0.5.1 install that upgrades to v0.5.3 silently
-// misses the vhosts.conf seed + welcome pages.
-//
-// Calling ensureApacheRuntimeFiles on every WmCreate catches this:
-// the checks are idempotent (only write when absent) so a healthy
-// install is a near-zero-cost stat pass, and a broken install
-// self-repairs on next launch.
-
-// ensureApacheRuntimeFiles is the shared seed routine. It creates:
-//
-//   1. conf/apache/vhosts.conf   — default localhost catch-all vhost
-//                                  so the Include directive in
-//                                  httpd.conf has something to read
-//   2. www/index.php             — the welcome landing page
-//   3. www/phpinfo.php           — the phpinfo shortcut tile target
-//
-// Each file is only written when missing, so user customisations
-// survive. If any write fails, we log and keep going — a broken
-// vhosts.conf is a worse UX than no seed at all, so partial success
-// is acceptable.
-//
-// Called from two places:
-//
-//   - The Apache catalog's PostInstall hook in download.go (fresh
-//     installs where Apache is being extracted from scratch)
-//   - main.go's WmCreate handler (every app launch, for upgraded
-//     installs where Apache was already extracted by a previous
-//     GoAMPP version that didn't know about these files)
 func ensureApacheRuntimeFiles(baseDir string, log func(string)) {
-	// 1. Default localhost vhost — needed for Apache to boot at
-	// all, since httpd.conf gets an `Include` pointing at this
-	// file during Apache's post-install.
+
 	vhostsFS := filepath.Join(baseDir, "conf", "apache", "vhosts.conf")
 	if _, err := os.Stat(vhostsFS); os.IsNotExist(err) {
 		if err := os.MkdirAll(filepath.Dir(vhostsFS), 0o755); err == nil {
@@ -62,27 +23,18 @@ func ensureApacheRuntimeFiles(baseDir string, log func(string)) {
 		}
 	}
 
-	// 2. Welcome landing page at www/index.php. Survives reinstalls
-	// because we only write when the file is missing — a user who
-	// edited their own index.php keeps their edits.
 	wwwDir := filepath.Join(baseDir, "www")
 	_ = os.MkdirAll(wwwDir, 0o755)
 
 	wwwIndex := filepath.Join(wwwDir, "index.php")
-	// Three cases:
-	//   1. file missing  → write the bundled welcome page
-	//   2. file ours     → overwrite (user is on an older version
-	//                      of GoAMPP and we have a refreshed design)
-	//   3. user-edited   → leave alone (no @goampp-welcome marker)
+
 	writeWelcome := false
 	switch existing, err := os.ReadFile(wwwIndex); {
 	case os.IsNotExist(err):
 		writeWelcome = true
 	case err == nil:
 		if bytes.Contains(existing, []byte("@goampp-welcome")) {
-			// Our file. Only rewrite if the marker version differs
-			// (avoids touching the file on every launch when nothing
-			// has actually changed).
+
 			if !bytes.Contains(existing, []byte(welcomeMarker)) {
 				writeWelcome = true
 			}
@@ -96,8 +48,6 @@ func ensureApacheRuntimeFiles(baseDir string, log func(string)) {
 		}
 	}
 
-	// 3. phpinfo() shortcut, targeted by the /phpinfo.php tile on
-	// the welcome page.
 	wwwPhpInfo := filepath.Join(wwwDir, "phpinfo.php")
 	if _, err := os.Stat(wwwPhpInfo); os.IsNotExist(err) {
 		if err := os.WriteFile(wwwPhpInfo, []byte(welcomePhpInfoPHP), 0o644); err == nil {
@@ -107,30 +57,11 @@ func ensureApacheRuntimeFiles(baseDir string, log func(string)) {
 		}
 	}
 
-	// 4. Mirror the bundled VC++ runtime DLLs into bin/php/. The
-	// installer drops good copies (v14.44) at {app}/runtime/ — we
-	// copy them next to php-cgi.exe so Windows' DLL search picks
-	// them up before any older C:\Windows\System32\vcruntime140.dll.
-	// Idempotent and only runs if PHP is already extracted, so
-	// startup cost on a stock install is one stat call.
 	ensurePhpRuntimeDLLs(baseDir, log)
 
-	// 5. Mirror the user's real brand assets into www/assets/ so
-	// the welcome page can <img src="..."> them through Apache.
-	// {app}/assets/icons/*.ico → www/assets/icons/*.ico
-	// {app}/logo.png            → www/assets/goampp.png
 	ensureWelcomeAssets(baseDir, log)
 }
 
-// ensureWelcomeAssets makes the user's bundled brand artwork
-// reachable over HTTP. Apache only serves www/, so the .ico files
-// shipped by the installer at {app}/assets/icons/ have to be
-// copied (or hard-linked, but copy is fine for ~10 KB icons) into
-// www/assets/icons/. Same idea for the GoAMPP logo at {app}/logo.png
-// → www/assets/goampp.png.
-//
-// Idempotent — copyFileIfChanged skips files that haven't changed
-// since the last launch, so this is essentially free on warm boot.
 func ensureWelcomeAssets(baseDir string, log func(string)) {
 	wwwAssets := filepath.Join(baseDir, "www", "assets")
 	wwwIcons := filepath.Join(wwwAssets, "icons")
@@ -138,15 +69,10 @@ func ensureWelcomeAssets(baseDir string, log func(string)) {
 		return
 	}
 
-	// 1. GoAMPP logo. logo.png ships at the install root.
 	if src := filepath.Join(baseDir, "logo.png"); fileExists(src) {
 		_ = copyFileIfChanged(src, filepath.Join(wwwAssets, "goampp.png"))
 	}
 
-	// 2. Tech-stack icons. Walk {app}/assets/icons and copy each
-	// .ico into www/assets/icons/. We copy unconditionally (well,
-	// when changed) so users who replace one with their own
-	// re-skinned icon see it on the welcome page after relaunch.
 	srcIcons := filepath.Join(baseDir, "assets", "icons")
 	entries, err := os.ReadDir(srcIcons)
 	if err != nil {
@@ -163,37 +89,18 @@ func ensureWelcomeAssets(baseDir string, log func(string)) {
 	}
 }
 
-// fileExists is a one-liner stat helper so the asset copy block
-// above doesn't need to spell the err == nil dance every time.
 func fileExists(path string) bool {
 	_, err := os.Stat(path)
 	return err == nil
 }
 
-// ensurePhpRuntimeDLLs copies the bundled v14.44 VC++ runtime DLLs
-// from {baseDir}/runtime/ into every PHP install directory we find:
-// the canonical bin/php/ AND every variant dir bin/php-<version>/.
-// PHP 8.x NTS x64 is linked against MSVC v14.44, and Windows checks
-// the application directory (where php-cgi.exe lives) BEFORE
-// C:\Windows\System32 in the DLL search order. Some Windows builds
-// carry an ancient System32\vcruntime140.dll (v14.0) that the
-// standalone redist refuses to overwrite — dropping a known-good
-// copy beside php-cgi.exe sidesteps the system-wide problem.
-//
-// Why we copy into the variant dirs too: switching versions invokes
-// robocopy /MIR which mirrors bin/php-<v>/ → bin/php/. Anything not
-// in the source variant gets deleted from the canonical mirror —
-// including a DLL we'd dropped only into bin/php/. By seeding the
-// variant dirs themselves, the DLL survives every switch.
 func ensurePhpRuntimeDLLs(baseDir string, log func(string)) {
 	runtimeDir := filepath.Join(baseDir, "runtime")
 	if _, err := os.Stat(runtimeDir); err != nil {
-		return // installer didn't ship runtime/ (older installer, dev build)
+		return
 	}
 	dlls := []string{"vcruntime140.dll", "vcruntime140_1.dll", "msvcp140.dll"}
 
-	// Walk every bin/php* directory that has php-cgi.exe — that's
-	// our marker for "this is a PHP install dir, drop runtime here".
 	binDir := filepath.Join(baseDir, "bin")
 	entries, err := os.ReadDir(binDir)
 	if err != nil {
@@ -207,7 +114,7 @@ func ensurePhpRuntimeDLLs(baseDir string, log func(string)) {
 		if name != "php" && !strings.HasPrefix(name, "php-") {
 			continue
 		}
-		// Skip preserved legacy installs and the runtime/ dir itself.
+
 		if strings.HasSuffix(name, "-legacy") {
 			continue
 		}
@@ -225,10 +132,6 @@ func ensurePhpRuntimeDLLs(baseDir string, log func(string)) {
 	}
 }
 
-// copyFileIfChanged copies src→dst, skipping the write if dst is
-// already byte-for-byte identical (cheap size + mtime gate first to
-// avoid hashing). Used by ensurePhpRuntimeDLLs so re-launches don't
-// rewrite identical DLLs every time.
 func copyFileIfChanged(src, dst string) error {
 	srcInfo, err := os.Stat(src)
 	if err != nil {
@@ -255,22 +158,10 @@ func copyFileIfChanged(src, dst string) error {
 	if err := out.Close(); err != nil {
 		return err
 	}
-	// Mirror mtime so the next launch hits the fast Stat-equal path.
+
 	return os.Chtimes(dst, srcInfo.ModTime(), srcInfo.ModTime())
 }
 
-// welcomeIndexPHP is the landing page rendered at http://localhost/.
-// It sniffs Apache/PHP/MariaDB/Redis versions at request time, lists
-// every project folder under www/, and renders everything with real
-// brand SVG logos (Simple Icons — CC0) so the page actually looks
-// like the stack it represents.
-//
-// Kept as a raw string literal — backticks survive Go's compile-time
-// string escaping so the HTML/PHP inside doesn't need to be mangled.
-// welcomeMarker is a sentinel string we write into our welcome
-// page so future ensureApacheRuntimeFiles calls can identify
-// "this is OUR file, safe to overwrite on upgrade" vs "the user
-// edited it, leave it alone".
 const welcomeMarker = "@goampp-welcome v6"
 
 const welcomeIndexPHP = `<?php
@@ -685,9 +576,6 @@ footer a { color: var(--brand); }
 </html>
 `
 
-// welcomePhpInfoPHP is the /phpinfo.php endpoint linked from the
-// welcome page. Trivial on its own; worth embedding so installs
-// that wipe www/ and reinstall Apache still get the shortcut back.
 const welcomePhpInfoPHP = `<?php
 // phpinfo() dump — linked from the GoAMPP welcome page as a quick
 // way to inspect the running PHP configuration. Delete this file

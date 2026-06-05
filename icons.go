@@ -11,71 +11,47 @@ import (
 	"github.com/rodrigocfd/windigo/win"
 )
 
-// icons.go — per-service logo loading and the Service-Kind →
-// category mapping.
-//
-// Windigo's Ico type only supports icons embedded as resources; we
-// load from arbitrary .ico files under assets/icons/ via LoadImage
-// and stash the HICON in a per-service map. The Services page card
-// grid then sends each card's SS_ICON Static an STM_SETICON message
-// pointing at the matching HICON.
-
-// serviceIconFiles maps a ServiceConf.Name → the .ico file in
-// assets/icons/ that represents it. Services not listed here fall back
-// to no icon at all (the row just renders text).
 var serviceIconFiles = map[string]string{
-	// Web stack
-	"Apache":     "apache.ico",
-	"Nginx":      "nginx.ico",
-	"PHP-FPM":    "php.ico",
-	// Databases
-	"MySQL":      "mysql.ico", // actually MariaDB — same shape, same protocol
+
+	"Apache":  "apache.ico",
+	"Nginx":   "nginx.ico",
+	"PHP-FPM": "php.ico",
+
+	"MySQL":      "mysql.ico",
 	"PostgreSQL": "postgresql.ico",
 	"Redis":      "redis.ico",
-	// Admin tools
+
 	"phpMyAdmin": "phpmyadmin.ico",
 	"Adminer":    "adminer.ico",
 	"pgweb":      "pgweb.ico",
-	// Storage, messaging & queues
-	"MinIO":      "minio.ico",
-	"Mailpit":    "mailpit.ico",
-	"RabbitMQ":   "rabbitmq.ico",
-	// Language runtimes (downloadable, no long-running process)
-	"Node.js":    "nodejs.ico",
-	"Python":     "python.ico",
-	"Go":         "go.ico",
-	"Java":       "java.ico",
-	"Erlang":     "erlang.ico",
-	"Julia":      "julia.ico",
-	"Zig":        "zig.ico",
-	"Dart":       "dart.ico",
-	"Lua":        "lua.ico",
-	"Ruby":       "ruby.ico",
-	"Rust":       "rust.ico",
-	"Kotlin":     "kotlin.ico",
-	"Haskell":    "haskell.ico",
-	"Elixir":     "elixir.ico",
-	"Crystal":    "crystal.ico",
-	"Scala":      "scala.ico",
-	"Swift":      "swift.ico",
+
+	"MinIO":    "minio.ico",
+	"Mailpit":  "mailpit.ico",
+	"RabbitMQ": "rabbitmq.ico",
+
+	"Node.js": "nodejs.ico",
+	"Python":  "python.ico",
+	"Go":      "go.ico",
+	"Java":    "java.ico",
+	"Erlang":  "erlang.ico",
+	"Julia":   "julia.ico",
+	"Zig":     "zig.ico",
+	"Dart":    "dart.ico",
+	"Lua":     "lua.ico",
+	"Ruby":    "ruby.ico",
+	"Rust":    "rust.ico",
+	"Kotlin":  "kotlin.ico",
+	"Haskell": "haskell.ico",
+	"Elixir":  "elixir.ico",
+	"Crystal": "crystal.ico",
+	"Scala":   "scala.ico",
+	"Swift":   "swift.ico",
 }
 
-// iconState holds the per-service HICONs we hand to the card
-// widgets via STM_SETICON. The previous design built two HIMAGELISTs
-// for the ListView's LVSIL_SMALL/NORMAL slots — those are gone now
-// that the Services page uses individual SS_ICON Statics.
 var iconState struct {
-	hIcons map[string]win.HICON // service name → 32×32 HICON
+	hIcons map[string]win.HICON
 }
 
-// installServiceIcons loads every .ico under assets/icons/ as a
-// 32×32 HICON and stores it in iconState.hIcons keyed by service
-// name. The card grid then sends STM_SETICON to its SS_ICON Statics
-// to drop those handles in place.
-//
-// Safe to call only AFTER the main window's HWND exists (i.e. from
-// the main WmCreate handler) — LoadImage doesn't strictly need it,
-// but the card widgets we'll target via setCardIcon do.
 func installServiceIcons() {
 	iconState.hIcons = map[string]win.HICON{}
 
@@ -87,7 +63,7 @@ func installServiceIcons() {
 		}
 		icoPath := filepath.Join(assetsDir, file)
 		if _, err := os.Stat(icoPath); err != nil {
-			continue // missing icon → blank tile, non-fatal
+			continue
 		}
 		hGdi, err := win.HINSTANCE(0).LoadImage(
 			win.ResIdStr(icoPath), co.IMAGE_ICON, 32, 32, co.LR_LOADFROMFILE)
@@ -99,13 +75,8 @@ func installServiceIcons() {
 	}
 }
 
-// stmSetIcon is the message ID for STM_SETICON. Not exposed by
-// windigo's co package, so we define it here.
 const stmSetIcon co.WM = 0x0170
 
-// setCardIcon hands the loaded HICON to a card's SS_ICON Static.
-// Called from refreshServiceList for every card on every refresh
-// — sending the same HICON twice is a no-op so it's safe.
 func setCardIcon(c *serviceCard, name string) {
 	if c == nil || c.iconStatic == nil {
 		return
@@ -121,9 +92,6 @@ func setCardIcon(c *serviceCard, name string) {
 	)
 }
 
-// ----- Category mapping --------------------------------------------------
-
-// Group IDs — stable, fixed set so we can look them up by service Kind.
 const (
 	groupWeb      int32 = 1
 	groupLanguage int32 = 2
@@ -131,9 +99,6 @@ const (
 	groupTool     int32 = 4
 )
 
-// groupForKind maps a ServiceConf.Kind to the numeric group ID.
-// Unknown kinds default to the tool group so nothing falls off the
-// edge of the list.
 func groupForKind(kind string) int32 {
 	switch strings.ToLower(kind) {
 	case "web":
@@ -146,4 +111,3 @@ func groupForKind(kind string) int32 {
 		return groupTool
 	}
 }
-

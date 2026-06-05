@@ -11,93 +11,40 @@ import (
 	"syscall"
 )
 
-// frameworks.go — the catalog of things GoAMPP can scaffold for the
-// user, plus the runner that executes a chosen framework's install
-// procedure. Each framework maps to a Project in config.json after
-// a successful scaffold.
-//
-// Three "kinds" of scaffold:
-//
-//  - "composer"  — runs `php composer.phar create-project <pkg> .`
-//                 inside a fresh project dir. Used for Laravel etc.
-//  - "download"  — downloads + extracts a ZIP (WordPress and any
-//                 other pre-packaged CMS). Reuses the existing
-//                 extractZip() helper.
-//  - "static"    — just drops a minimal index.html. No external tools.
-//
-// Future: "node" via npx, "python" via pip+venv, "go" via go mod init.
-
-// Framework describes one scaffoldable project template.
 type Framework struct {
-	Name        string // human label, shown in the dropdown
-	IconFile    string // matches assets/icons/<file>
-	Runtime     string // "php" | "node" | "python" | "java" | "go" | "static"
-	Description string // one-line hint under the picker
+	Name        string
+	IconFile    string
+	Runtime     string
+	Description string
 
-	// RequiredTools is the list of binaries/tools this framework
-	// needs before it can scaffold. We check each via hasTool()
-	// before running the command and bail if anything is missing.
 	RequiredTools []string
 
-	// Kind is one of "composer", "download", "static".
 	Kind string
 
-	// ComposerPackage — only used when Kind == "composer". Value is
-	// the composer package name, e.g. "laravel/laravel".
 	ComposerPackage string
 
-	// DownloadURL — only used when Kind == "download". A ZIP file
-	// we fetch and extract into the project directory.
 	DownloadURL string
-	StripTop    string // optional top-level folder inside the ZIP to strip
+	StripTop    string
 
-	// DocRoot is the subdirectory of the project the web server
-	// should serve. "" means the project root. "public" for Laravel.
 	DocRoot string
 }
 
-// Framework also supports custom command sets for Node/Python/Go/Java
-// scaffolders. These are tail commands that run inside the project
-// directory after creation, in order. Used by Kind="cmd" frameworks.
-//
-// CmdLines exist alongside ComposerPackage / DownloadURL because
-// some scaffolders are shell-style multi-step (npm init -y → npm
-// install express → write index.js) and don't fit a single command.
 type cmdStep struct {
-	desc string   // logged before run
-	args []string // resolveTool() runs on args[0]
+	desc string
+	args []string
 }
 
-// We store the command list inside an extended Framework struct
-// (cmdSteps) hidden from JSON. The base Framework type carries the
-// metadata; cmdSteps drives the scaffolder.
-//
-// To keep diffs small we just attach a parallel map keyed by name.
 var frameworkCmdSteps = map[string][]cmdStep{}
 
-// proxyPort is the port a non-PHP framework's dev server listens on.
-// When set, scaffoldFramework records a Project.Port and the vhost
-// writer emits a ProxyPass instead of a DocumentRoot.
 var frameworkProxyPort = map[string]int{}
 
-// frameworkPostFile lets a scaffolder drop a starter file (index.js,
-// app.py, etc.) into the project root after the command steps run.
-// Path is relative to the project dir; content is written verbatim.
 var frameworkPostFile = map[string]struct {
 	path    string
 	content string
 }{}
 
-// Frameworks is the catalog. Keys are the same as Framework.Name.
-// Stored as an ordered slice so the UI picker has a predictable
-// presentation instead of map iteration chaos.
-//
-// Grouped roughly: PHP first (since Apache+PHP is the only stack
-// that works without spinning up a separate dev server), then
-// Node, then Python, then Go, then Java, then "static" odds-and-
-// ends.
 var Frameworks = []*Framework{
-	// ----- PHP frameworks (run under Apache+mod_cgi, port 80) -----
+
 	{
 		Name:            "Laravel",
 		IconFile:        "laravel.ico",
@@ -120,7 +67,7 @@ var Frameworks = []*Framework{
 	},
 	{
 		Name:            "Symfony",
-		IconFile:        "php.ico", // user doesn't have a Symfony icon
+		IconFile:        "php.ico",
 		Runtime:         "php",
 		Description:     "PHP enterprise framework — symfony/skeleton via composer",
 		RequiredTools:   []string{"php", "composer"},
@@ -150,7 +97,6 @@ var Frameworks = []*Framework{
 		DocRoot:       "",
 	},
 
-	// ----- Node.js frameworks (each ships its own dev server) -----
 	{
 		Name:          "Next.js",
 		IconFile:      "nodejs.ico",
@@ -197,7 +143,6 @@ var Frameworks = []*Framework{
 		DocRoot:       "build",
 	},
 
-	// ----- Python frameworks (each ships its own dev server) -----
 	{
 		Name:          "Flask",
 		IconFile:      "python.ico",
@@ -226,7 +171,6 @@ var Frameworks = []*Framework{
 		DocRoot:       "",
 	},
 
-	// ----- Go frameworks (each compiles to a single static binary) -----
 	{
 		Name:          "Go HTTP server",
 		IconFile:      "go.ico",
@@ -246,7 +190,6 @@ var Frameworks = []*Framework{
 		DocRoot:       "",
 	},
 
-	// ----- Java frameworks -----
 	{
 		Name:          "Spring Boot",
 		IconFile:      "java.ico",
@@ -254,14 +197,12 @@ var Frameworks = []*Framework{
 		Description:   "Spring Boot starter — fetched from start.spring.io",
 		RequiredTools: []string{"java"},
 		Kind:          "download",
-		// start.spring.io serves a generated zip from /starter.zip with
-		// query params. Default deps: web + devtools, language Java.
+
 		DownloadURL: "https://start.spring.io/starter.zip?type=maven-project&language=java&dependencies=web,devtools&packageName=com.example.demo&name=demo",
 		StripTop:    "demo/",
 		DocRoot:     "",
 	},
 
-	// ----- Static -----
 	{
 		Name:        "Static HTML",
 		IconFile:    "",
@@ -272,9 +213,6 @@ var Frameworks = []*Framework{
 	},
 }
 
-// init builds the cmdSteps map for the Kind="cmd" frameworks. This
-// is in init() so the slice literal above stays scannable instead
-// of having every npm/pip command embedded inline.
 func init() {
 	frameworkCmdSteps["Next.js"] = []cmdStep{
 		{"create-next-app", []string{"npx", "--yes", "create-next-app@latest", ".",
@@ -327,7 +265,6 @@ app.listen(port, () => {
 	}
 	frameworkProxyPort["AdonisJS"] = 3333
 
-	// ----- Python -----
 	frameworkCmdSteps["Flask"] = []cmdStep{
 		{"pip install flask", []string{"pip", "install", "flask"}},
 	}
@@ -377,7 +314,6 @@ def root():
 	}
 	frameworkProxyPort["FastAPI"] = 8000
 
-	// ----- Go -----
 	frameworkCmdSteps["Go HTTP server"] = []cmdStep{
 		{"go mod init", []string{"go", "mod", "init", "goampp.local/app"}},
 	}
@@ -430,7 +366,6 @@ func main() {
 	frameworkProxyPort["Gin (Go)"] = 8080
 }
 
-// frameworkByName is a convenience lookup by Name.
 func frameworkByName(name string) *Framework {
 	for _, f := range Frameworks {
 		if f.Name == name {
@@ -440,11 +375,6 @@ func frameworkByName(name string) *Framework {
 	return nil
 }
 
-// ----- Tool detection ---------------------------------------------------
-
-// hasTool reports whether a command-line tool is available, either
-// in the system PATH or at a goampp-managed location (for tools we
-// install ourselves, like composer.phar under bin/php/).
 func hasTool(name string) bool {
 	if _, err := exec.LookPath(name); err == nil {
 		return true
@@ -457,20 +387,6 @@ func hasTool(name string) bool {
 	return false
 }
 
-// knownToolPath returns the goampp-local path for a tool, or empty
-// if we don't track one. This lets hasTool + resolveTool find the
-// runtimes we install via DownloadCatalog without depending on the
-// user's system PATH.
-//
-// Layout matches what extractZip produces after StripTop:
-//   bin/php/php.exe
-//   bin/php/composer.phar     (auto-downloaded by ensureComposer)
-//   bin/node/node.exe         (Node ZIP is flat after stripping)
-//   bin/node/npm.cmd
-//   bin/python/python.exe     (embeddable ZIP, no top folder)
-//   bin/python/Scripts/pip.exe (bootstrapped by Python post-install)
-//   bin/go/bin/go.exe         (Go ZIP keeps the bin/ subdir)
-//   bin/java/bin/java.exe     (JDK ZIP keeps the bin/ subdir)
 func knownToolPath(name string) string {
 	if app == nil {
 		return ""
@@ -505,11 +421,6 @@ func knownToolPath(name string) string {
 	return ""
 }
 
-// resolveTool returns an absolute path for a known tool name when
-// goampp manages it locally, or the bare name otherwise (so PATH
-// lookup falls through to the OS). Used by runInDir so framework
-// scaffolders can write `node` or `python` and get the bundled
-// install instead of relying on the user's system PATH.
 func resolveTool(name string) string {
 	if p := knownToolPath(name); p != "" {
 		if _, err := os.Stat(p); err == nil {
@@ -519,16 +430,8 @@ func resolveTool(name string) string {
 	return name
 }
 
-// ----- Composer auto-install --------------------------------------------
-
-// composerURL is the canonical installer for composer.phar. It's a
-// single PHP script — no installer to run, just save and invoke via
-// `php composer.phar ...`.
 const composerURL = "https://getcomposer.org/composer.phar"
 
-// ensureComposer checks for composer.phar and downloads it on the
-// first call. Cached to bin/php/composer.phar so subsequent runs
-// are instant. Returns the absolute path to the .phar.
 func ensureComposer(log func(string)) (string, error) {
 	target := filepath.Join(app.baseDir, "bin", "php", "composer.phar")
 	if _, err := os.Stat(target); err == nil {
@@ -538,22 +441,13 @@ func ensureComposer(log func(string)) (string, error) {
 	if err := os.MkdirAll(filepath.Dir(target), 0o755); err != nil {
 		return "", err
 	}
-	// httpDownload is already in download.go, so we inherit the
-	// progress reporting + .part file atomicity.
+
 	if err := httpDownload(composerURL, target, log, nil); err != nil {
 		return "", fmt.Errorf("download composer: %w", err)
 	}
 	return target, nil
 }
 
-// runInDir launches a command with the given working directory,
-// piping both stdout and stderr into the logger line-by-line so
-// the user sees scaffold/composer output as it streams. Blocks
-// until the command exits.
-//
-// argv[0] is resolved through resolveTool, so callers can write
-// "node" / "python" / "composer" and get the goampp-bundled
-// version instead of relying on the user's system PATH.
 func runInDir(dir string, log func(string), argv ...string) error {
 	if len(argv) == 0 {
 		return fmt.Errorf("empty command")
@@ -563,7 +457,7 @@ func runInDir(dir string, log func(string), argv ...string) error {
 	cmd.Dir = dir
 	cmd.SysProcAttr = &syscall.SysProcAttr{
 		HideWindow:    true,
-		CreationFlags: 0x08000000, // CREATE_NO_WINDOW
+		CreationFlags: 0x08000000,
 	}
 
 	stdout, err := cmd.StdoutPipe()
@@ -577,9 +471,7 @@ func runInDir(dir string, log func(string), argv ...string) error {
 	if err := cmd.Start(); err != nil {
 		return err
 	}
-	// Pipe both streams into the log. We reuse streamToLog from
-	// service.go which handles the line-buffered scanner with a
-	// 1MB line budget for very long output.
+
 	go streamToLog(stdout, func(format string, a ...any) {
 		log(fmt.Sprintf(format, a...))
 	})
@@ -589,22 +481,13 @@ func runInDir(dir string, log func(string), argv ...string) error {
 	return cmd.Wait()
 }
 
-// ----- The scaffolder ---------------------------------------------------
-
-// ScaffoldResult is what the UI shows after a successful create:
-// the docroot path it should point Apache at, plus any warnings
-// the scaffolder wants to surface.
 type ScaffoldResult struct {
-	DocRoot string // absolute
-	Warning string // optional
+	DocRoot string
+	Warning string
 }
 
-// scaffoldFramework builds a new project at projectDir using the
-// given framework template. Blocking — call from a goroutine.
-// Logs everything through `log`.
 func scaffoldFramework(f *Framework, projectDir string, log func(string)) (*ScaffoldResult, error) {
-	// Abort early if the project dir already exists and isn't empty
-	// — a scaffold would clobber whatever's in there.
+
 	if fi, err := os.Stat(projectDir); err == nil && fi.IsDir() {
 		entries, _ := os.ReadDir(projectDir)
 		if len(entries) > 0 {
@@ -615,11 +498,9 @@ func scaffoldFramework(f *Framework, projectDir string, log func(string)) (*Scaf
 		return nil, fmt.Errorf("create project dir: %w", err)
 	}
 
-	// Check every required tool up front so we fail fast with a
-	// clear message instead of bombing halfway through.
 	for _, tool := range f.RequiredTools {
 		if tool == "composer" {
-			// Composer is special — we auto-install it.
+
 			continue
 		}
 		if !hasTool(tool) {
@@ -640,11 +521,6 @@ func scaffoldFramework(f *Framework, projectDir string, log func(string)) (*Scaf
 	return nil, fmt.Errorf("unknown framework kind: %s", f.Kind)
 }
 
-// scaffoldCmd runs the predefined command sequence stored in
-// frameworkCmdSteps[f.Name], then drops a starter file from
-// frameworkPostFile if one is registered. Used for Node, Python,
-// and Go scaffolders that need multiple steps (npm init → install
-// → write entry point) or aren't single composer-style commands.
 func scaffoldCmd(f *Framework, projectDir string, log func(string)) (*ScaffoldResult, error) {
 	steps, ok := frameworkCmdSteps[f.Name]
 	if !ok || len(steps) == 0 {
@@ -657,8 +533,7 @@ func scaffoldCmd(f *Framework, projectDir string, log func(string)) (*ScaffoldRe
 			return nil, fmt.Errorf("%s: %w", step.desc, err)
 		}
 	}
-	// Drop the starter file (entry point, hello-world handler, etc.)
-	// if the framework has one. Skipped silently when none registered.
+
 	if pf, has := frameworkPostFile[f.Name]; has {
 		full := filepath.Join(projectDir, pf.path)
 		if err := os.WriteFile(full, []byte(pf.content), 0o644); err != nil {
@@ -673,8 +548,6 @@ func scaffoldCmd(f *Framework, projectDir string, log func(string)) (*ScaffoldRe
 	return &ScaffoldResult{DocRoot: docroot}, nil
 }
 
-// scaffoldComposer runs `php composer.phar create-project <pkg> .`
-// inside projectDir. Auto-downloads composer.phar if missing.
 func scaffoldComposer(f *Framework, projectDir string, log func(string)) (*ScaffoldResult, error) {
 	composer, err := ensureComposer(log)
 	if err != nil {
@@ -691,12 +564,11 @@ func scaffoldComposer(f *Framework, projectDir string, log func(string)) (*Scaff
 		return nil, fmt.Errorf("composer create-project: %w", err)
 	}
 
-	// Special case: Laravel + Livewire adds Livewire via composer require.
 	if f.Name == "Laravel + Livewire" {
 		log("adding Livewire via composer require...")
 		if err := runInDir(projectDir, log,
 			phpExe, composer, "require", "livewire/livewire", "--no-interaction"); err != nil {
-			// Non-fatal — project still works, user can add it manually.
+
 			log("livewire install failed (non-fatal): " + err.Error())
 		}
 	}
@@ -705,10 +577,8 @@ func scaffoldComposer(f *Framework, projectDir string, log func(string)) (*Scaff
 	return &ScaffoldResult{DocRoot: docroot}, nil
 }
 
-// scaffoldDownload fetches a ZIP and extracts it into projectDir
-// with optional top-level directory stripping.
 func scaffoldDownload(f *Framework, projectDir string, log func(string)) (*ScaffoldResult, error) {
-	// Stash the ZIP in downloads/ so a re-create doesn't re-fetch.
+
 	dlDir := filepath.Join(app.baseDir, "downloads")
 	if err := os.MkdirAll(dlDir, 0o755); err != nil {
 		return nil, err
@@ -733,8 +603,6 @@ func scaffoldDownload(f *Framework, projectDir string, log func(string)) (*Scaff
 	return &ScaffoldResult{DocRoot: docroot}, nil
 }
 
-// scaffoldStatic drops a minimal index.html so the vhost has
-// something to serve from day one.
 func scaffoldStatic(f *Framework, projectDir string, log func(string)) (*ScaffoldResult, error) {
 	html := `<!DOCTYPE html>
 <html lang="en">
@@ -762,15 +630,6 @@ func scaffoldStatic(f *Framework, projectDir string, log func(string)) (*Scaffol
 	return &ScaffoldResult{DocRoot: projectDir}, nil
 }
 
-// ----- Post-scaffold wiring ---------------------------------------------
-
-// createProject is the single high-level entry point the UI calls
-// when the user clicks "Create Project". Runs scaffoldFramework,
-// then registers the project as a Vhost, persists config, and
-// triggers ApplyVhosts so the hosts file + Apache vhost include
-// pick up the new domain without a manual edit.
-//
-// Blocking — callers should wrap in a goroutine.
 func createProject(f *Framework, name, domain string, log func(string)) error {
 	if name == "" {
 		return fmt.Errorf("project name required")
@@ -785,17 +644,10 @@ func createProject(f *Framework, name, domain string, log func(string)) error {
 		return err
 	}
 
-	// Record in config.json as both a Project (for the UI list)
-	// and a Vhost (so ApplyVhosts writes it out).
 	docrootRel := "{base}/" + strings.ReplaceAll(
 		strings.TrimPrefix(result.DocRoot, app.baseDir+string(os.PathSeparator)),
 		`\`, `/`)
 
-	// Frameworks that ship their own dev server (Node, Python, Go,
-	// Java) get a "proxy" vhost — Apache forwards requests to the
-	// dev server's port instead of serving files. The user has to
-	// run the framework's dev command (`npm run dev`, `flask run`,
-	// etc.) themselves; we just route the traffic.
 	proxyPort := frameworkProxyPort[f.Name]
 
 	app.cfg.Projects = append(app.cfg.Projects, Project{
@@ -813,8 +665,7 @@ func createProject(f *Framework, name, domain string, log func(string)) error {
 		Enabled:    true,
 	}
 	if proxyPort > 0 {
-		// vhost.go uses ProxyPort to decide between DocumentRoot
-		// and ProxyPass when emitting the Apache vhost block.
+
 		vh.ProxyPort = proxyPort
 	}
 	app.cfg.Vhosts = append(app.cfg.Vhosts, vh)
@@ -822,9 +673,6 @@ func createProject(f *Framework, name, domain string, log func(string)) error {
 		return fmt.Errorf("save config: %w", err)
 	}
 
-	// Apply so the hosts file + Apache vhosts.conf both learn the
-	// new domain. May fail if we're not admin — the error bubbles
-	// up with a clear hint.
 	if err := ApplyVhosts(app.baseDir, app.cfg); err != nil {
 		log("apply vhosts: " + err.Error())
 		log("  → run GoAMPP as administrator for hosts-file writes to work")

@@ -17,54 +17,38 @@ import (
 	"github.com/rodrigocfd/windigo/win"
 )
 
-// ----- Layout geometry --------------------------------------------------
-// Everything is in design pixels. ui.Dpi scales at construction time, so
-// these numbers are what you see on a 100% monitor.
 const (
-	// Bumped 960 → 1100 so cards can breathe — 228px cards fit
-	// 3 buttons (Start / Conf / Ver) without crowding instead of
-	// the previous 195px squeeze where labels overlapped.
 	winW = 1100
 
-	// Sidebar (left column of nav buttons).
-	sideX = 10
-	sideY = 48
-	sideW = 110
-	sideH = 38
+	sideX   = 10
+	sideY   = 48
+	sideW   = 110
+	sideH   = 38
 	sideGap = 4
 
-	// Content area — wider to fit the bigger cards.
 	contentX = 130
 	contentY = 48
 	contentW = 960
 
-	// Download progress strip — sits 8px below the content area.
 	progH = 18
 
-	// Log panel — full width minus 10px margin each side.
 	logX = 10
 	logW = 1080
 	logH = 90
 
-	// Services page sub-tab strip (inside the content area).
-	svcTabBtnW   = 84  // width of each tab button
-	svcTabBtnH   = 24  // height
-	svcTabStripY = 36  // Y within the services page container
-	cardGridY    = 64  // Y where card grid starts (below action row + tab strip)
+	svcTabBtnW   = 84
+	svcTabBtnH   = 24
+	svcTabStripY = 36
+	cardGridY    = 64
 )
 
-// Dynamic layout values — computed by computeLayout() from service count.
-// Must be set before ui.NewMain is called.
 var (
-	contentH int // height of the page container
-	progY    int // Y of the download progress strip
-	logY     int // Y of the log panel
-	winH     int // total window height
+	contentH int
+	progY    int
+	logY     int
+	winH     int
 )
 
-// computeLayout calculates window and content geometry from the number of
-// services in app.services so the card grid always fits without clipping.
-// Call this once after app.services is populated, before building the UI.
 func computeLayout() {
 	ncols := (contentW + cardGap) / (cardW + cardGap)
 	if ncols < 1 {
@@ -72,37 +56,21 @@ func computeLayout() {
 	}
 	nrows := (len(app.services) + ncols - 1) / ncols
 	if nrows < 2 {
-		nrows = 2 // show at least 2 rows even with few services
+		nrows = 2
 	}
-	// cardGridY = top action row (40px) + tab strip (24px) + gap (4px)
-	// 16px = bottom padding inside content area
+
 	contentH = cardGridY + nrows*(cardH+cardGap) - cardGap + 16
 	progY = contentY + contentH + 8
 	logY = progY + progH + 8
 	winH = logY + logH + 40
 }
 
-// ----- Page container tracking ------------------------------------------
-
-// page wraps one of the Control containers that act as a "view" in the
-// sidebar navigation. Exactly one page is visible at a time; the rest are
-// ShowWindow(SW_HIDE)'d.
 type page struct {
-	key       string      // matches the sidebar button key
-	title     string      // shown in the page header strip
-	container *ui.Control // the Win32 child window acting as the page
+	key       string
+	title     string
+	container *ui.Control
 }
 
-// domainExtensions is the dev-friendly TLD list shown in the
-// "Domain extension" dropdown on the Projects and Virtual Hosts
-// forms. .test is first because it's the only one reserved by
-// RFC 6761 specifically for testing — it can never resolve to a
-// real public site, so there's no risk of accidentally hijacking
-// production traffic via your hosts file.
-//
-// .dev is intentionally NOT included: Google bought it as a real
-// gTLD with HSTS preload, so any browser that hits an http:// URL
-// on .dev will refuse to load it.
 var domainExtensions = []string{
 	".test",
 	".local",
@@ -112,57 +80,22 @@ var domainExtensions = []string{
 	".site",
 }
 
-// essentialServices is the "Start Stack" button's target set — the core
-// web stack a developer needs to serve PHP pages with a database:
-//
-//   - Apache    (web server; runs PHP via classic CGI)
-//   - MySQL     (MariaDB — phpMyAdmin is useless without it)
-//   - phpMyAdmin (tool-only; auto-installs if missing)
-//
-// PHP itself doesn't need a running service — Apache spawns php-cgi.exe
-// per request via mod_cgi, so there's no "PHP" entry here.
-//
-// Nginx, Postgres, Redis, Adminer stay manual — boot them from the
-// per-row Start button if you need them.
 var essentialServices = []string{"Apache", "PHP-FPM", "MySQL", "phpMyAdmin"}
 
-// ensureStackEssentials walks the essential-services list and:
-//   1. downloads + installs anything missing,
-//   2. launches services whose ServiceConf.Enabled is true AND that
-//      have a real daemon (ms.Service != nil),
-//   3. opens http://localhost/ in the browser at the end — once,
-//      after Apache is ready.
-//
-// Services with Enabled=false (e.g. PHP-FPM) are install-only:
-// Apache spawns php-cgi.exe per-request via mod_cgi.
-//
-// Tool entries (phpMyAdmin, Adminer) have ms.Service == nil — the
-// install step is enough, we don't kick startService on them
-// because that would call openPath(OpenURL) and pop a browser tab
-// to /phpmyadmin/ in the middle of Start Stack. Users who want
-// phpMyAdmin click its card directly.
-//
-// Synchronous — call from a goroutine. Called from both Start Stack
-// and Restart Stack so they share the same install/launch policy.
 func ensureStackEssentials() {
 	for _, name := range essentialServicesActive() {
 		ms := app.findService(name)
 		if ms == nil {
 			continue
 		}
-		// Step 1: ensure the binary is on disk. The tightened
-		// CheckFile sentinels catch partial installs too — e.g.
-		// Apache with no conf/, MySQL with no system tables.
+
 		if _, ok := DownloadCatalog[name]; ok && !IsInstalled(name, app.baseDir) {
 			if err := DownloadAndInstallVersion(name, ms.Conf.ActiveVersion, app.baseDir, app.appendLog, uiDownloadProgress); err != nil {
 				app.appendLog(fmt.Sprintf("[%s] install failed: %v", name, err))
 				continue
 			}
 		}
-		// Step 2: skip non-daemon entries (tools) and disabled
-		// daemons. Both fall through with the binary on disk —
-		// Apache will serve them once its Action handler / docroot
-		// references kick in.
+
 		if ms.Service == nil || !ms.Conf.Enabled {
 			continue
 		}
@@ -176,18 +109,10 @@ func ensureStackEssentials() {
 	}
 	app.wnd.UiThread(refreshServiceList)
 
-	// Step 3: open the welcome page once, after the stack is up.
-	// Small delay so Apache has had time to bind :80 and accept
-	// the first request without the browser hitting "connection
-	// refused" and showing an error.
 	time.Sleep(800 * time.Millisecond)
 	openPath("http://localhost/")
 }
 
-// essentialServicesActive returns essentialServices with the web
-// server slot replaced by whichever server the user picked in the
-// Active Web Server dropdown. So if they switched to Nginx, "Start
-// Stack" boots Nginx instead of Apache.
 func essentialServicesActive() []string {
 	out := make([]string, 0, len(essentialServices))
 	web := activeWebServer()
@@ -203,27 +128,16 @@ func essentialServicesActive() []string {
 
 var (
 	pages      []*page
-	activePage string // currently-visible page key
+	activePage string
 
-	// Download progress strip widgets (set by buildProgressStrip,
-	// updated by uiDownloadProgress).
 	progBar   *ui.ProgressBar
 	progLabel *ui.Static
 
-	// (Services page no longer has a ListView — it's a hand-built
-	// grid of serviceCard widgets, declared as its own var below.)
+	edDropdown   *ui.ComboBox
+	edPathLabel  *ui.Static
+	edContent    *ui.Edit
+	edKnownPaths []string
 
-	// Editor page widgets (populated in buildEditorPage).
-	edDropdown  *ui.ComboBox
-	edPathLabel *ui.Static
-	edContent   *ui.Edit
-	edKnownPaths []string // indexed parallel to the dropdown items
-
-	// Vhosts page widgets (populated in buildVhostsPage). The
-	// domain field is split into a name input + extension dropdown
-	// so users pick the TLD from a known-good list rather than
-	// typing it free-form (and accidentally creating a .dev vhost
-	// that hits HSTS preload).
 	vhostList      *ui.ListView
 	vhostDomainNm  *ui.Edit
 	vhostDomainExt *ui.ComboBox
@@ -231,8 +145,6 @@ var (
 	vhostPort      *ui.Edit
 	vhostServer    *ui.ComboBox
 
-	// Projects page widgets (populated in buildProjectsPage). Same
-	// split-domain treatment as the Vhosts form.
 	projFramework *ui.ComboBox
 	projName      *ui.Edit
 	projDomainNm  *ui.Edit
@@ -240,11 +152,6 @@ var (
 	projList      *ui.ListView
 )
 
-// ----- Entry point -------------------------------------------------------
-
-// buildMainLayout constructs the whole single-window layout: sidebar on
-// the left, content pages in the middle, progress strip + log panel at
-// the bottom. Called once from main.go after the Main window is created.
 func buildMainLayout(wnd *ui.Main) {
 	buildTitleBar(wnd)
 	buildSidebar(wnd)
@@ -253,34 +160,27 @@ func buildMainLayout(wnd *ui.Main) {
 	buildLogPanel(wnd)
 }
 
-// buildProgressStrip places the download progress bar + its status label
-// just above the log panel. Both are always visible — the label just
-// reads "Idle" when no download is running.
 func buildProgressStrip(wnd *ui.Main) {
-	// Status label on the left.
+
 	progLabel = ui.NewStatic(wnd, ui.OptsStatic().
 		Text("Idle").
 		Position(ui.Dpi(10, progY+3)).
 		Size(ui.Dpi(380, 16)))
 
-	// ProgressBar filling the rest of the strip width.
 	progBar = ui.NewProgressBar(wnd, ui.OptsProgressBar().
 		Position(ui.Dpi(400, progY)).
 		Size(ui.Dpi(550, progH)).
-		Range(0, 1000)) // we report in thousandths so the bar is smooth
+		Range(0, 1000))
 }
 
-// uiDownloadProgress is the DownloadAndInstall progress callback. It
-// runs off the UI thread — we marshal every update back to the UI
-// thread via wnd.UiThread so SetPos and SetWindowText are safe.
 func uiDownloadProgress(stage, name string, done, total int64) {
 	if app.wnd == nil {
 		return
 	}
-	// Precompute the values off the UI thread so the closure is cheap.
+
 	var (
 		labelText string
-		pos       int // 0..1000 so the bar has sub-percent resolution
+		pos       int
 	)
 	switch stage {
 	case "starting":
@@ -326,10 +226,6 @@ func uiDownloadProgress(stage, name string, done, total int64) {
 	})
 }
 
-// buildTitleBar used to draw a "GoAMPP / Local Web Stack Control
-// Panel" header. The user asked for a cleaner layout so we now
-// emit just the etched separator line — the OS title bar already
-// shows the window title, no need to repeat it inside the chrome.
 func buildTitleBar(wnd *ui.Main) {
 	ui.NewStatic(wnd, ui.OptsStatic().
 		Text("").
@@ -338,8 +234,6 @@ func buildTitleBar(wnd *ui.Main) {
 		CtrlStyle(co.SS_ETCHEDHORZ))
 }
 
-// buildSidebar creates the vertical column of navigation buttons. Each
-// button calls showPage() with its own key.
 func buildSidebar(wnd *ui.Main) {
 	items := []struct {
 		key, label string
@@ -364,7 +258,6 @@ func buildSidebar(wnd *ui.Main) {
 		y += sideH + sideGap
 	}
 
-	// Vertical separator between sidebar and content.
 	ui.NewStatic(wnd, ui.OptsStatic().
 		Text("").
 		Position(ui.Dpi(sideX+sideW+6, sideY)).
@@ -372,9 +265,6 @@ func buildSidebar(wnd *ui.Main) {
 		CtrlStyle(co.SS_ETCHEDVERT))
 }
 
-// buildPages creates one Control container per view and stores them in
-// the pages slice. They all overlap at the same rect — only the active
-// one is shown (set in main.go's WmCreate handler, which calls showPage).
 func buildPages(wnd *ui.Main) {
 	pages = []*page{
 		{key: "services", title: "Services", container: newPageContainer(wnd)},
@@ -391,38 +281,19 @@ func buildPages(wnd *ui.Main) {
 	activePage = "services"
 }
 
-// newPageContainer mints a Control sized to the content area. We
-// override the class brush to our gray window-background colour and
-// wire the WM_CTLCOLORSTATIC handler so child Statics blend in
-// instead of showing a white box behind their text. WS_EX_CLIENTEDGE
-// is stripped so there's no chunky sunken border around each page.
 func newPageContainer(wnd *ui.Main) *ui.Control {
 	c := ui.NewControl(wnd, ui.OptsControl().
 		Position(ui.Dpi(contentX, contentY)).
 		Size(ui.Dpi(contentW, contentH)).
 		ExStyle(co.WS_EX_LEFT).
-		ClassBrush(windowBgBrush())) // gray fill instead of system white
+		ClassBrush(windowBgBrush()))
 	c.On().WmDrawItem(handleDrawItem)
 	c.On().WmCtlColorStatic(staticBgHandler)
 	return c
 }
 
-// showPage makes `key` visible and hides every other page. Called from
-// sidebar button handlers and from the initial WmCreate fixup.
-//
-// Why the InvalidateRect dance: hiding/showing sibling Control
-// containers via SW_HIDE/SW_SHOW does NOT automatically erase the
-// pixels where the previous page's children were drawn. With
-// WS_CLIPCHILDREN on the parent, only the new page's child rects
-// get repainted — anything that lived on the old page but doesn't
-// have a corresponding child on the new page leaves stale pixels
-// behind. Forcing the new page to invalidate its full client area
-// (with erase=true) makes Windows send WM_ERASEBKGND first, which
-// fills the area with the class brush (gray), wiping the leftover.
 func showPage(key string) {
-	// Hide every non-active page FIRST. Doing this before showing the
-	// new page means the (now-active) page paints onto an already-cleared
-	// region instead of on top of the prior page's stale pixels.
+
 	for _, p := range pages {
 		if p.key != key {
 			p.container.Hwnd().ShowWindow(co.SW_HIDE)
@@ -432,12 +303,7 @@ func showPage(key string) {
 		if p.key == key {
 			h := p.container.Hwnd()
 			h.ShowWindow(co.SW_SHOW)
-			// Force a full erase + repaint of the page AND all of its
-			// children. Without RDW_ALLCHILDREN, transparent / non-
-			// opaque child controls (Statics with CTLCOLORSTATIC) keep
-			// whatever pixels were under them when the prior tab was
-			// last drawn — which is exactly the "old tab bleeding
-			// through behind the cards" symptom.
+
 			_ = h.RedrawWindow(nil, 0,
 				co.RDW_INVALIDATE|co.RDW_ERASE|co.RDW_ALLCHILDREN|co.RDW_UPDATENOW)
 		}
@@ -448,52 +314,27 @@ func showPage(key string) {
 	}
 }
 
-// ----- Services page -----------------------------------------------------
-
-// serviceCard bundles all the widgets for one service tile so
-// refreshServiceList can update text + button labels in place
-// without rebuilding the whole grid.
 type serviceCard struct {
-	srcIdx     int         // index into app.services
-	cardCtrl   *ui.Control // card-level container HWND; moved/hidden for tab switching
-	iconStatic *ui.Static  // SS_ICON, set via STM_SETICON
+	srcIdx     int
+	cardCtrl   *ui.Control
+	iconStatic *ui.Static
 	nameStatic *ui.Static
 	statusLbl  *ui.Static
 	versionLbl *ui.Static
-	// rect is the card's bounding box in services-page client coords.
-	// Updated by switchSvcTab when cards are repositioned.
+
 	rect win.RECT
 
-	// One toggle button replaces the old Start/Stop pair: its label
-	// flips between "▶ Start" and "■ Stop" and its colour scheme
-	// flips between green (action: start) and red (action: stop)
-	// depending on Service.Running(). Restart and Conf stay split
-	// out — they're always-applicable verbs that don't toggle.
 	btnToggle  *ui.Button
 	btnRestart *ui.Button
 	btnConf    *ui.Button
-	// btnVer is a small "▾" button that opens the version-switch
-	// menu, but ONLY shown for multi-version services (PHP, Node,
-	// Python). Discoverability: right-click works too, but a
-	// visible affordance is the obvious place for users to click.
+
 	btnVer *ui.Button
 
-	// statusDot is a small coloured square painted as a Static with
-	// owner-draw — green = running, red = stopped, grey = not
-	// installed. Lives at the top-left of the card next to the icon.
 	statusDot *ui.Static
 }
 
-// versionMenuBase is the starting menu-item ID for the right-click
-// context menu's variant entries. We keep it well above any other
-// command range used in the app (sidebar/footer buttons + tray
-// items) so there's no chance of collision when TrackPopupMenu's
-// returned ID is decoded back into a service+version pair.
 const versionMenuBase = 6000
 
-// showServiceContextMenu hit-tests the cursor position against
-// every service card and, if the click landed on a multi-version
-// service, pops a "Switch to version X" menu.
 func showServiceContextMenu(parent *ui.Control, screenPt win.POINT) {
 	pt := screenPt
 	_ = parent.Hwnd().ScreenToClientPt(&pt)
@@ -512,9 +353,6 @@ func showServiceContextMenu(parent *ui.Control, screenPt win.POINT) {
 	showVersionMenuForCard(hit, screenPt)
 }
 
-// showVersionMenuForCard is the shared popup logic used by both the
-// right-click context handler and the visible "▾" button on each
-// multi-version card. screenPt is where the menu pops up.
 func showVersionMenuForCard(hit *serviceCard, screenPt win.POINT) {
 	ms := app.services[hit.srcIdx]
 	spec, ok := DownloadCatalog[ms.Conf.Name]
@@ -535,7 +373,7 @@ func showVersionMenuForCard(hit *serviceCard, screenPt win.POINT) {
 	current := ms.Conf.ActiveVersion
 	for i, v := range spec.Variants {
 		flags := co.MF_STRING
-		// Mark the active variant with a check.
+
 		if v.Version == current ||
 			(current == "" && strings.HasPrefix(spec.Version, v.Version)) {
 			flags |= co.MF_CHECKED
@@ -543,9 +381,6 @@ func showVersionMenuForCard(hit *serviceCard, screenPt win.POINT) {
 		appendMenuItem(hMenu, flags, uintptr(versionMenuBase+i), v.Version)
 	}
 
-	// TrackPopupMenu requires foreground for the menu to stay alive
-	// past the click. Returning the chosen ID synchronously via
-	// TPM_RETURNCMD avoids needing a separate WM_COMMAND handler.
 	app.wnd.Hwnd().SetForegroundWindow()
 	cmd, _ := hMenu.TrackPopupMenu(
 		co.TPM_LEFTBUTTON|co.TPM_RIGHTBUTTON|co.TPM_RETURNCMD,
@@ -563,9 +398,6 @@ func showVersionMenuForCard(hit *serviceCard, screenPt win.POINT) {
 	serviceName := ms.Conf.Name
 	srcIdx := hit.srcIdx
 
-	// Stop the service first if it's running — switching versions
-	// while the binary is in use would fail to delete/repoint the
-	// junction on Windows (open file handles).
 	if ms.Service != nil && ms.Service.Running() {
 		app.appendLog(fmt.Sprintf("[%s] stopping before version switch", serviceName))
 		_ = ms.Service.Stop()
@@ -577,7 +409,7 @@ func showVersionMenuForCard(hit *serviceCard, screenPt win.POINT) {
 			app.appendLog(fmt.Sprintf("[%s] switch %s failed: %v", serviceName, chosen, err))
 			return
 		}
-		// Persist the choice so the version sticks across restarts.
+
 		if app.cfg != nil && srcIdx < len(app.cfg.Services) {
 			app.cfg.Services[srcIdx].ActiveVersion = chosen
 			_ = SaveConfig(app.baseDir, app.cfg)
@@ -587,10 +419,6 @@ func showVersionMenuForCard(hit *serviceCard, screenPt win.POINT) {
 	}()
 }
 
-// activeWebServer reads the user's selected web server from
-// app.cfg.Settings, defaulting to "Apache" when the setting is
-// absent (older configs or fresh installs). Returned in canonical
-// case so callers can compare against ServiceConf.Name directly.
 func activeWebServer() string {
 	if app.cfg != nil && app.cfg.Settings.ActiveWebServer != "" {
 		return app.cfg.Settings.ActiveWebServer
@@ -598,73 +426,45 @@ func activeWebServer() string {
 	return "Apache"
 }
 
-// isWebKindCard reports whether a card belongs to the web-server
-// group — used to dim the inactive web server when the user picks
-// the other one.
 func isWebKindCard(c *serviceCard) bool {
 	return groupForKind(app.services[c.srcIdx].Conf.Kind) == groupWeb
 }
 
-// serviceCards is the live grid. One entry per app.services entry.
-// Built once at WM_CREATE; updated by refreshServiceList.
 var serviceCards []*serviceCard
 
-// svcTabGroup defines one entry in the Services-page tab strip.
 type svcTabGroup struct {
 	label  string
-	groups []int32 // nil = show all categories
+	groups []int32
 }
 
-// svcTabGroups is the ordered list of sub-tabs shown inside the Services page.
 var svcTabGroups = []svcTabGroup{
-	{"All",      nil},
-	{"Web",      []int32{groupWeb}},
+	{"All", nil},
+	{"Web", []int32{groupWeb}},
 	{"Database", []int32{groupDatabase}},
 	{"Language", []int32{groupLanguage}},
-	{"Tools",    []int32{groupTool}},
+	{"Tools", []int32{groupTool}},
 }
 
 var (
-	activeSvcTabIdx int          // index into svcTabGroups
-	svcTabBtns      []*ui.Button // one per svcTabGroups entry
-	svcTabParent    *ui.Control  // services page container (for repaints)
+	activeSvcTabIdx int
+	svcTabBtns      []*ui.Button
+	svcTabParent    *ui.Control
 )
 
-// Per-card geometry. Bumped 195→228 wide so the 3-button row
-// (Start/Stop · Conf · Ver ▾) reads cleanly without truncated
-// labels. 4 cards + 3 gaps + 2 padding = 228×4 + 8×3 + 10×2 = 936
-// which fits in contentW (960) with a comfortable right margin.
 const (
 	cardW   = 228
 	cardH   = 72
 	cardGap = 8
 )
 
-// webServerPicker is the ComboBox at the top of the Services page
-// that selects which web server is "active" — Apache or Nginx. The
-// inactive one's card is dimmed and its toggle button disabled, so
-// users don't accidentally start two HTTP servers competing for
-// :80. Persisted to config.json on change.
 var webServerPicker *ui.ComboBox
 
-// buildServicesPage builds the page chrome (web-server picker at
-// top, category section headers, card grid, bottom Start Stack
-// button row) and creates one service-card widget group per entry
-// in app.services. Card text values are set later by
-// refreshServiceList — at build time we just create the controls.
 func buildServicesPage(parent *ui.Control) {
-	// Right-click anywhere on the services page → version picker
-	// for the card under the cursor (only fires for services that
-	// have Variants; everything else is a no-op so users don't get
-	// an empty menu).
+
 	parent.On().WmContextMenu(func(p ui.WmContextMenu) {
 		showServiceContextMenu(parent, p.CursorPos())
 	})
 
-	// ----- Top strip: Active Web Server picker --------------------
-	// Single inline row at the top — no big label, just a short
-	// "Web:" prefix and the dropdown. Keeps the chrome out of the
-	// way of the actual service grid.
 	ui.NewStatic(parent, ui.OptsStatic().
 		Text("Web:").
 		Position(ui.Dpi(10, 8)).
@@ -674,15 +474,13 @@ func buildServicesPage(parent *ui.Control) {
 		Position(ui.Dpi(40, 6)).
 		Width(ui.DpiX(110)).
 		Texts("Apache", "Nginx"))
-	// Pre-select whichever the config says is active.
+
 	if activeWebServer() == "Nginx" {
 		webServerPicker.SelectIndex(1)
 	} else {
 		webServerPicker.SelectIndex(0)
 	}
-	// Stack action buttons live on the same top row, immediately
-	// after the Web Server picker — this is what the user sees at a
-	// glance, no scrolling/looking-down required.
+
 	bx := 160
 	btnY := 4
 	addStackBtn := func(label string, w int, scheme ColorScheme, onClick func()) {
@@ -731,8 +529,7 @@ func buildServicesPage(parent *ui.Control) {
 			app.cfg.Settings.ActiveWebServer = choice
 			_ = SaveConfig(app.baseDir, app.cfg)
 		}
-		// Stop the now-inactive web server if it's running, so
-		// switching is safe. Async to avoid blocking the UI thread.
+
 		go func(chosen string) {
 			for _, ms := range app.services {
 				if groupForKind(ms.Conf.Kind) != groupWeb {
@@ -752,15 +549,14 @@ func buildServicesPage(parent *ui.Control) {
 		refreshServiceList()
 	})
 
-	// ----- Sub-tab strip (Web / Database / Language / Tools / All) ----
 	svcTabParent = parent
-	svcTabBtns = svcTabBtns[:0] // reset on rebuild
+	svcTabBtns = svcTabBtns[:0]
 	tabX := 10
 	for i, tg := range svcTabGroups {
 		i, tg := i, tg
 		scheme := SchemeSidebar
 		if i == 0 {
-			scheme = SchemePrimary // "All" starts active
+			scheme = SchemePrimary
 		}
 		btn := newColoredButton(parent, ui.OptsButton().
 			Text(tg.label).
@@ -772,9 +568,6 @@ func buildServicesPage(parent *ui.Control) {
 		tabX += svcTabBtnW + 4
 	}
 
-	// ----- Card grid ------------------------------------------------
-	// Cards flow left-to-right, top-to-bottom in category order.
-	// ncols computed from available width so adding services adds rows.
 	ncols := (contentW + cardGap) / (cardW + cardGap)
 	if ncols < 1 {
 		ncols = 1
@@ -800,21 +593,6 @@ func buildServicesPage(parent *ui.Control) {
 	_ = pos
 }
 
-// buildServiceCard creates the widgets for one service tile at the
-// given top-left coordinates. Layout:
-//
-//   ┌────────────────────────────────────────────┐
-//   │ [icon] [●] Service Name                     │  (icon + status dot + name)
-//   │            Status                           │
-//   │            Version                          │
-//   │ [Start/Stop] [Restart] [Conf]               │  (3 buttons)
-//   └────────────────────────────────────────────┘
-//
-// The Start/Stop button is a single toggle whose label and colour
-// flip based on Service.Running() — green "▶ Start" when stopped,
-// red "■ Stop" when running. This is what the user asked for: one
-// button so the running indicator is unambiguous (green = action
-// available to start; red = action available to stop).
 func buildServiceCard(parent *ui.Control, x, y, srcIdx int, ms *ManagedService) *serviceCard {
 	c := &serviceCard{
 		srcIdx: srcIdx,
@@ -824,9 +602,6 @@ func buildServiceCard(parent *ui.Control, x, y, srcIdx int, ms *ManagedService) 
 		},
 	}
 
-	// Card-level container — all child widgets live inside this
-	// Control so that switching tabs can hide/move the whole card
-	// with a single SetWindowPos / ShowWindow call.
 	c.cardCtrl = ui.NewControl(parent, ui.OptsControl().
 		Position(ui.Dpi(x, y)).
 		Size(ui.Dpi(cardW, cardH)).
@@ -835,10 +610,8 @@ func buildServiceCard(parent *ui.Control, x, y, srcIdx int, ms *ManagedService) 
 	c.cardCtrl.On().WmDrawItem(handleDrawItem)
 	c.cardCtrl.On().WmCtlColorStatic(staticBgHandler)
 
-	// All child positions are now relative to (0, 0) inside cardCtrl.
-	cc := c.cardCtrl // shorthand
+	cc := c.cardCtrl
 
-	// Background border — SS_ETCHEDFRAME outlines the card.
 	ui.NewStatic(cc, ui.OptsStatic().
 		Text("").
 		Position(ui.Dpi(0, 0)).
@@ -894,7 +667,6 @@ func buildServiceCard(parent *ui.Control, x, y, srcIdx int, ms *ManagedService) 
 		startService(idx)
 	})
 
-	// btnRestart kept on struct but rendered off-card (outside bounds).
 	c.btnRestart = newColoredButton(cc, ui.OptsButton().
 		Text("").
 		Position(ui.Dpi(cardW+100, cardH+100)).
@@ -967,16 +739,13 @@ func buildServiceCard(parent *ui.Control, x, y, srcIdx int, ms *ManagedService) 
 	}
 	c.btnConf.On().BnClicked(func() {
 		ms := app.services[idx]
-		// Runtime cards: "⌨ Term" opens a ConEmu session with the
-		// language's bin dir prepended to PATH.
+
 		if strings.ToLower(ms.Conf.Kind) == "runtime" {
 			openTerminalForService(ms.Conf.Name)
 			return
 		}
 		if ms.Conf.ConfigFile == "" {
-			// Fall back to "Open URL" for tool-only entries
-			// (phpMyAdmin/Adminer) so the Conf button isn't
-			// useless on those.
+
 			if ms.Conf.OpenURL != "" {
 				openPath(ms.Conf.OpenURL)
 				return
@@ -991,43 +760,35 @@ func buildServiceCard(parent *ui.Control, x, y, srcIdx int, ms *ManagedService) 
 	return c
 }
 
-// langBinDirs maps a runtime service name to the bin directories
-// (relative to baseDir) that must be on PATH for the language to work.
 var langBinDirs = map[string][]string{
-	"Node.js":  {"bin/node"},
-	"Python":   {"bin/python", "bin/python/Scripts"},
-	"Go":       {"bin/go/bin"},
-	"Java":     {"bin/java/bin"},
-	"Julia":    {"bin/julia/bin"},
-	"Zig":      {"bin/zig"},
-	"Dart":     {"bin/dart/bin"},
-	"Lua":      {"bin/lua"},
-	"Ruby":     {"bin/ruby/bin"},
-	"Rust":     {"bin/rust/.cargo/bin"},
-	"Kotlin":   {"bin/kotlin/bin"},
-	"Haskell":  {"bin/haskell/bin"},
-	"Elixir":   {"bin/elixir/bin", "bin/erlang/bin"},
-	"Crystal":  {"bin/crystal"},
-	"Scala":    {"bin/scala/bin"},
-	"Erlang":   {"bin/erlang/bin"},
-	"Swift":    {},
+	"Node.js": {"bin/node"},
+	"Python":  {"bin/python", "bin/python/Scripts"},
+	"Go":      {"bin/go/bin"},
+	"Java":    {"bin/java/bin"},
+	"Julia":   {"bin/julia/bin"},
+	"Zig":     {"bin/zig"},
+	"Dart":    {"bin/dart/bin"},
+	"Lua":     {"bin/lua"},
+	"Ruby":    {"bin/ruby/bin"},
+	"Rust":    {"bin/rust/.cargo/bin"},
+	"Kotlin":  {"bin/kotlin/bin"},
+	"Haskell": {"bin/haskell/bin"},
+	"Elixir":  {"bin/elixir/bin", "bin/erlang/bin"},
+	"Crystal": {"bin/crystal"},
+	"Scala":   {"bin/scala/bin"},
+	"Erlang":  {"bin/erlang/bin"},
+	"Swift":   {},
 }
 
-// openTerminalForService launches ConEmu64.exe (from the installer/
-// directory) with a cmd.exe shell whose PATH has the runtime's bin dir
-// prepended so the language is immediately usable. Falls back to a
-// plain cmd.exe window if ConEmu is not present.
 func openTerminalForService(name string) {
 	conEmu := filepath.Join(app.baseDir, "installer", "ConEmu64.exe")
 
-	// Resolve relative bin dirs to absolute paths.
 	relDirs := langBinDirs[name]
 	var prepend []string
 	for _, rel := range relDirs {
 		prepend = append(prepend, filepath.Join(app.baseDir, filepath.FromSlash(rel)))
 	}
 
-	// Clone environment, injecting extra dirs at the front of PATH.
 	env := os.Environ()
 	for i, e := range env {
 		if strings.HasPrefix(strings.ToUpper(e), "PATH=") {
@@ -1037,14 +798,14 @@ func openTerminalForService(name string) {
 			break
 		}
 	}
-	// Also set GOAMPP_BASE so scripts can reference it.
+
 	env = append(env, "GOAMPP_BASE="+app.baseDir)
 
 	if _, err := os.Stat(conEmu); err != nil {
-		// ConEmu not found — open a plain cmd.exe console.
+
 		cmd := exec.Command("cmd.exe")
 		cmd.Env = env
-		cmd.SysProcAttr = &syscall.SysProcAttr{CreationFlags: 0x00000010} // CREATE_NEW_CONSOLE
+		cmd.SysProcAttr = &syscall.SysProcAttr{CreationFlags: 0x00000010}
 		_ = cmd.Start()
 		return
 	}
@@ -1055,11 +816,9 @@ func openTerminalForService(name string) {
 	_ = cmd.Start()
 }
 
-// switchSvcTab shows/hides and repositions card containers to match the
-// selected sub-tab. idx is an index into svcTabGroups.
 func switchSvcTab(idx int) {
 	if idx == activeSvcTabIdx && idx != 0 {
-		return // already on this tab
+		return
 	}
 	activeSvcTabIdx = idx
 	targetGroups := svcTabGroups[idx].groups
@@ -1090,7 +849,7 @@ func switchSvcTab(idx int) {
 			win.SIZE{},
 			co.SWP_NOZORDER|co.SWP_NOSIZE|co.SWP_NOACTIVATE)
 		c.cardCtrl.Hwnd().ShowWindow(co.SW_SHOWNA)
-		// Keep rect in page-client coords for hit test.
+
 		c.rect = win.RECT{
 			Left: int32(newX), Top: int32(newY),
 			Right: int32(newX + cardW), Bottom: int32(newY + cardH),
@@ -1098,7 +857,6 @@ func switchSvcTab(idx int) {
 		pos++
 	}
 
-	// Update tab button highlight: active = Primary, others = Sidebar.
 	for i, btn := range svcTabBtns {
 		scheme := SchemeSidebar
 		if i == idx {
@@ -1108,14 +866,12 @@ func switchSvcTab(idx int) {
 		btn.Hwnd().InvalidateRect(nil, true)
 	}
 
-	// Force full repaint of the services page to clear stale pixels.
 	if svcTabParent != nil {
 		svcTabParent.Hwnd().RedrawWindow(nil, 0,
 			co.RDW_INVALIDATE|co.RDW_ERASE|co.RDW_ALLCHILDREN|co.RDW_UPDATENOW)
 	}
 }
 
-// containsInt32 reports whether val is in slice.
 func containsInt32(slice []int32, val int32) bool {
 	for _, v := range slice {
 		if v == val {
@@ -1125,9 +881,6 @@ func containsInt32(slice []int32, val int32) bool {
 	return false
 }
 
-// refreshServiceList walks every card and re-syncs its labels +
-// button state with the live ManagedService. Called on initial
-// startup and whenever a service's state callback fires.
 func refreshServiceList() {
 	if len(serviceCards) == 0 {
 		return
@@ -1138,8 +891,6 @@ func refreshServiceList() {
 		running := ms.Service != nil && ms.Service.Running()
 		installed := IsInstalled(ms.Conf.Name, app.baseDir) || ms.Service == nil
 
-		// Status text — short, no leading dot (we have the dot widget
-		// for that).
 		status := "Stopped"
 		if !ms.Conf.Enabled {
 			status = "Disabled"
@@ -1156,21 +907,12 @@ func refreshServiceList() {
 		if ms.Conf.Port > 0 {
 			status += "  :" + fmt.Sprint(ms.Conf.Port)
 		}
-		// Web server cards that aren't the active choice get a
-		// clear hint so the user knows why their toggle is muted.
+
 		if isWebKindCard(c) && ms.Conf.Name != active {
 			status = "Inactive — pick " + ms.Conf.Name + " up top"
 		}
 		c.statusLbl.Hwnd().SetWindowText(status)
 
-		// Status dot — green running, red stopped, grey not
-		// installed / inactive web server. The actual colour comes
-		// from CTLCOLORSTATIC, which we don't intercept per-widget,
-		// so for now we use unicode glyph swaps as a colour proxy
-		// that survives without owner-draw plumbing:
-		//   ●  filled    — running (or pickable)
-		//   ○  hollow    — stopped / not running
-		//   ·  small dot — inactive / not installed
 		dot := "○"
 		switch {
 		case isWebKindCard(c) && ms.Conf.Name != active:
@@ -1182,9 +924,6 @@ func refreshServiceList() {
 		}
 		c.statusDot.Hwnd().SetWindowText(dot)
 
-		// Toggle button — label + scheme flip based on running state.
-		// Inactive web server gets greyed out (Start label, but no
-		// click effect since the handler refuses).
 		switch {
 		case isWebKindCard(c) && ms.Conf.Name != active:
 			c.btnToggle.Hwnd().SetWindowText("▶ Start")
@@ -1197,10 +936,6 @@ func refreshServiceList() {
 			c.btnToggle.Hwnd().EnableWindow(true)
 		}
 
-		// Merge the version into the name line so the simplified
-		// card doesn't need a separate version row. Multi-version
-		// services show the active variant from config; otherwise
-		// fall back to the catalogue's flat Version label.
 		nameLine := ms.Conf.Name
 		if spec, ok := DownloadCatalog[ms.Conf.Name]; ok {
 			short := spec.Version
@@ -1223,19 +958,10 @@ func refreshServiceList() {
 		c.nameStatic.Hwnd().SetWindowText(nameLine)
 		c.versionLbl.Hwnd().SetWindowText("")
 
-		// Drop the icon onto the SS_ICON Static. Done via the
-		// per-name HICON map populated by installServiceIcons.
 		setCardIcon(c, ms.Conf.Name)
 	}
 }
 
-// categoryLabel returns the human-readable category name for a
-// group ID. Kept in one place so the Services column values match
-// whatever headers we might later re-introduce.
-
-// categoryLabel returns the human-readable category name for a
-// group ID. Kept in one place so the Services column values match
-// whatever headers we might later re-introduce.
 func categoryLabel(groupID int32) string {
 	switch groupID {
 	case groupWeb:
@@ -1249,11 +975,6 @@ func categoryLabel(groupID int32) string {
 	}
 }
 
-// ----- Editor page -------------------------------------------------------
-
-// buildEditorPage creates the built-in text editor view: a dropdown of
-// every known config file in the project, a big multi-line edit control,
-// and Save / Reload buttons. No notepad.exe — files are edited in-place.
 func buildEditorPage(parent *ui.Control) {
 	ui.NewStatic(parent, ui.OptsStatic().
 		Text("File:").
@@ -1261,7 +982,7 @@ func buildEditorPage(parent *ui.Control) {
 	edDropdown = ui.NewComboBox(parent, ui.OptsComboBox().
 		Position(ui.Dpi(50, 30)).
 		Width(ui.DpiX(360)))
-	// When a user picks a file from the dropdown, load it immediately.
+
 	edDropdown.On().CbnSelChange(func() {
 		idx := edDropdown.SelectedIndex()
 		if idx < 0 || idx >= len(edKnownPaths) {
@@ -1270,9 +991,6 @@ func buildEditorPage(parent *ui.Control) {
 		loadFileIntoEditor(edKnownPaths[idx])
 	})
 
-	// Only Save + Reload here. "Open in Explorer" and "Refresh List"
-	// were clutter — users can refresh via the file dropdown, and the
-	// editor is the point of this page so Explorer is redundant.
 	newColoredButton(parent, ui.OptsButton().
 		Text("Save").
 		Position(ui.Dpi(420, 28)).
@@ -1293,7 +1011,6 @@ func buildEditorPage(parent *ui.Control) {
 		}
 	})
 
-	// Path label (tells the user exactly which file they're editing).
 	ui.NewStatic(parent, ui.OptsStatic().
 		Text("Path:").
 		Position(ui.Dpi(10, 62)))
@@ -1302,7 +1019,6 @@ func buildEditorPage(parent *ui.Control) {
 		Position(ui.Dpi(50, 62)).
 		Size(ui.Dpi(contentW-60, 16)))
 
-	// The editor itself — multi-line, vertical+horizontal scroll.
 	edContent = ui.NewEdit(parent, ui.OptsEdit().
 		Position(ui.Dpi(10, 86)).
 		Width(ui.DpiX(contentW-20)).
@@ -1310,14 +1026,8 @@ func buildEditorPage(parent *ui.Control) {
 		CtrlStyle(co.ES_MULTILINE|co.ES_AUTOVSCROLL|co.ES_AUTOHSCROLL|co.ES_WANTRETURN|co.ES_NOHIDESEL).
 		WndStyle(co.WS_CHILD|co.WS_VISIBLE|co.WS_TABSTOP|co.WS_VSCROLL|co.WS_HSCROLL|co.WS_BORDER))
 
-	// Initial dropdown population happens in main.go WmCreate (after the
-	// combo box has an actual HWND to add items to).
 }
 
-// populateEditorDropdown fills the combo box with every known config
-// file that currently exists on disk, plus a few always-useful entries
-// (config.json, hosts file). Called from WmCreate and the "Refresh List"
-// button.
 func populateEditorDropdown() {
 	if edDropdown == nil {
 		return
@@ -1336,20 +1046,17 @@ func populateEditorDropdown() {
 		edKnownPaths = append(edKnownPaths, path)
 	}
 
-	// 1. Every service config file that exists
 	for _, ms := range app.services {
 		if ms.Conf.ConfigFile == "" {
 			continue
 		}
 		add(ms.Conf.Name, ExpandPath(ms.Conf.ConfigFile, app.baseDir))
 	}
-	// 2. GoAMPP's own config
+
 	add("GoAMPP config", filepath.Join(app.baseDir, "config.json"))
-	// 3. Apache/Nginx generated vhost includes (if present)
+
 	add("Apache vhosts", ExpandPath(app.cfg.Settings.ApacheVhostsInclude, app.baseDir))
-	// 4. Windows hosts file (edit needs admin — we just open read-only to
-	// the user first; they can try Save, which will return the access
-	// error so they know to relaunch elevated).
+
 	add("Windows hosts", DefaultHostsFile())
 
 	if len(edKnownPaths) > 0 {
@@ -1358,8 +1065,6 @@ func populateEditorDropdown() {
 	}
 }
 
-// loadFileIntoEditor reads a file's contents into the editor buffer and
-// updates the path label. Silently no-ops if the editor isn't built yet.
 func loadFileIntoEditor(path string) {
 	if edContent == nil || edPathLabel == nil {
 		return
@@ -1371,17 +1076,12 @@ func loadFileIntoEditor(path string) {
 		edPathLabel.Hwnd().SetWindowText("(failed to read: " + path + ")")
 		return
 	}
-	// Windows Edit controls expect CRLF for newlines. Upgrade bare LFs
-	// so files that came from a Linux checkout display as one-line-per-
-	// logical-line instead of a single squashed glob.
+
 	text := strings.ReplaceAll(string(data), "\r\n", "\n")
 	text = strings.ReplaceAll(text, "\n", "\r\n")
 	edContent.SetText(text)
 	edPathLabel.Hwnd().SetWindowText(path)
 
-	// Also select the matching entry in the dropdown so the UI stays
-	// consistent when loadFileIntoEditor is called from elsewhere
-	// (e.g. the Services tab "Edit Config" button).
 	for i, p := range edKnownPaths {
 		if p == path {
 			edDropdown.SelectIndex(i)
@@ -1391,9 +1091,6 @@ func loadFileIntoEditor(path string) {
 	app.appendLog(fmt.Sprintf("editor: loaded %s", path))
 }
 
-// saveEditorBuffer writes the editor's current text back to whichever
-// file the path label points to. An atomic temp-file rename keeps a
-// half-written buffer from clobbering a working config.
 func saveEditorBuffer() {
 	if edContent == nil || edPathLabel == nil {
 		return
@@ -1404,8 +1101,7 @@ func saveEditorBuffer() {
 		return
 	}
 	data := []byte(edContent.Text())
-	// The Edit control already emits CRLF. Don't translate — config files
-	// on Windows expect CRLF anyway.
+
 	if err := atomicWrite(path, data); err != nil {
 		app.appendLog(fmt.Sprintf("editor save: %v", err))
 		return
@@ -1413,11 +1109,6 @@ func saveEditorBuffer() {
 	app.appendLog(fmt.Sprintf("editor: saved %s (%d bytes)", path, len(data)))
 }
 
-// ----- Vhosts page -------------------------------------------------------
-
-// buildVhostsPage draws the virtual host manager: list of configured
-// domains, inline add/edit form, and Apply button that writes to the
-// hosts file + Apache/Nginx vhost includes.
 func buildVhostsPage(parent *ui.Control) {
 	vhostList = ui.NewListView(parent, ui.OptsListView().
 		Position(ui.Dpi(10, 28)).
@@ -1430,9 +1121,7 @@ func buildVhostsPage(parent *ui.Control) {
 		Column("Port", ui.DpiX(60)).
 		Column("Server", ui.DpiX(90)))
 	vhostList.On().LvnItemChanged(func(p *win.NMLISTVIEW) {
-		// Guard everything in a recover so a panic in the click
-		// handler can't propagate up into LVM_SETITEMTEXT and make
-		// the next AddItem look like it failed.
+
 		defer func() {
 			if r := recover(); r != nil {
 				app.appendLog(fmt.Sprintf("vhost row select: %v", r))
@@ -1441,30 +1130,21 @@ func buildVhostsPage(parent *ui.Control) {
 		if p.UChanged&co.LVIF_STATE == 0 {
 			return
 		}
-		// Only react when the row was *selected* — without the
-		// state mask check we get fired during AddItem too, which
-		// then tries to populate the form from a half-built vhost
-		// and ends up reading garbage indices.
-		if p.UNewState&0x0002 == 0 { // LVIS_SELECTED
+
+		if p.UNewState&0x0002 == 0 {
 			return
 		}
 		idx := int(p.IItem)
 		if idx < 0 || idx >= len(app.cfg.Vhosts) {
 			return
 		}
-		// All form widgets must be created before we can poke them.
-		// During the very first AddItem (called from WmCreate),
-		// vhostDomainNm/Ext might still be nil because they're
-		// constructed AFTER vhostList in build order — bail out
-		// silently and let the user re-select once everything is up.
+
 		if vhostDomainNm == nil || vhostDomainExt == nil ||
 			vhostDocRoot == nil || vhostPort == nil || vhostServer == nil {
 			return
 		}
 		v := app.cfg.Vhosts[idx]
-		// Split the saved domain into name + ext for the form. The
-		// split is on the LAST dot so multi-dot names like
-		// "api.myapp.test" still work — name="api.myapp", ext=".test".
+
 		name, ext := splitDomain(v.Domain)
 		vhostDomainNm.SetText(name)
 		setDomainExtSelection(vhostDomainExt, ext)
@@ -1483,13 +1163,7 @@ func buildVhostsPage(parent *ui.Control) {
 			vhostServer.SelectIndex(0)
 		}
 	})
-	// (refreshVhostList() is called from main.go's WmCreate handler once
-	// the ListView's HWND actually exists.)
 
-	// Inline form. Domain is split into a name input + an extension
-	// dropdown so users pick from the curated TLD list rather than
-	// typing free-form (and accidentally hitting HSTS-preloaded TLDs
-	// like .dev).
 	formY := 200
 	ui.NewStatic(parent, ui.OptsStatic().
 		Text("Domain").
@@ -1528,7 +1202,6 @@ func buildVhostsPage(parent *ui.Control) {
 		Position(ui.Dpi(72, formY2)).
 		Width(ui.DpiX(contentW-100)))
 
-	// Action buttons
 	btnY := formY2 + 34
 	x := 10
 	addBtn := func(label string, w int, scheme ColorScheme, onClick func()) {
@@ -1540,9 +1213,7 @@ func buildVhostsPage(parent *ui.Control) {
 		b.On().BnClicked(onClick)
 		x += w + 6
 	}
-	// Three buttons is enough: Save handles both add (no selection) and
-	// update (selection). Delete removes the selected row. Apply writes
-	// to the hosts file + Apache/Nginx configs on disk.
+
 	addBtn("Save", 90, SchemeSuccess, func() {
 		v, err := readVhostForm()
 		if err != nil {
@@ -1550,7 +1221,7 @@ func buildVhostsPage(parent *ui.Control) {
 			return
 		}
 		if idx := selectedVhostIndex(); idx >= 0 {
-			// Preserve enabled flag from the existing row.
+
 			v.Enabled = app.cfg.Vhosts[idx].Enabled
 			app.cfg.Vhosts[idx] = v
 		} else {
@@ -1579,7 +1250,6 @@ func buildVhostsPage(parent *ui.Control) {
 	})
 }
 
-// refreshVhostList rebuilds the vhost ListView from app.cfg.Vhosts.
 func refreshVhostList() {
 	if vhostList == nil {
 		return
@@ -1602,10 +1272,6 @@ func refreshVhostList() {
 	}
 }
 
-// ----- Settings page -----------------------------------------------------
-
-// buildSettingsPage shows an overview of the runtime paths plus a small
-// "dashboard" strip with global shortcuts.
 func buildSettingsPage(parent *ui.Control) {
 	y := 10
 	section := func(title string) {
@@ -1613,7 +1279,7 @@ func buildSettingsPage(parent *ui.Control) {
 			Text(title).
 			Position(ui.Dpi(10, y)).
 			Size(ui.Dpi(contentW-20, 16)))
-		// Thin separator line under the section header.
+
 		ui.NewStatic(parent, ui.OptsStatic().
 			Text("").
 			Position(ui.Dpi(10, y+18)).
@@ -1633,7 +1299,6 @@ func buildSettingsPage(parent *ui.Control) {
 		y += 18
 	}
 
-	// ----- Paths --------------------------------------------------
 	section("PATHS")
 	row("Install dir", app.baseDir)
 	row("Config", filepath.Join(app.baseDir, "config.json"))
@@ -1642,7 +1307,6 @@ func buildSettingsPage(parent *ui.Control) {
 	row("Hosts file", DefaultHostsFile())
 	row("Downloads cache", filepath.Join(app.baseDir, "downloads"))
 
-	// ----- State --------------------------------------------------
 	y += 8
 	section("STATE")
 	row("Services", fmt.Sprintf("%d total · %d enabled",
@@ -1660,13 +1324,9 @@ func buildSettingsPage(parent *ui.Control) {
 	}
 	row("Running elevated", elev)
 
-	// ----- Actions ------------------------------------------------
 	y += 12
 	section("ACTIONS")
 
-	// Buttons in a tidy 4-column grid. Each column is 180px wide,
-	// each button 170px, gap 10. Two rows max so nothing wraps off
-	// the page.
 	const (
 		btnW = 170
 		btnH = 28
@@ -1744,19 +1404,14 @@ func buildSettingsPage(parent *ui.Control) {
 		}
 		app.appendLog(fmt.Sprintf("path: removed %d goampp entries from user PATH", n))
 	})
-	// Postgres console — opens a cmd window with bin/pgsql/bin/ on
-	// PATH so the user can run psql / pg_dump / createdb without
-	// fishing for the path. Only useful if Postgres is installed,
-	// but harmless when it's not (cmd just opens, missing exe at
-	// most prints "not recognized" on first command).
+
 	addBtn("Open psql Console", SchemePrimary, func() {
 		pgBin := filepath.Join(app.baseDir, "bin", "pgsql", "bin")
 		if _, err := os.Stat(filepath.Join(pgBin, "psql.exe")); err != nil {
 			app.appendLog("psql: PostgreSQL not installed — install it from the Services tab first")
 			return
 		}
-		// Launch a detached cmd window with PATH primed and a friendly
-		// banner. /K keeps the prompt open after psql exits.
+
 		cmd := exec.Command("cmd", "/c", "start", "", "cmd", "/K",
 			"set PATH="+pgBin+";%PATH% && cd /d "+app.baseDir+
 				" && echo PostgreSQL console — try: psql -U postgres")
@@ -1767,7 +1422,6 @@ func buildSettingsPage(parent *ui.Control) {
 		quitApp(app.wnd)
 	})
 
-	// ----- About --------------------------------------------------
 	y = rowY + btnH + gapY + 16
 	section("ABOUT")
 	row("Project", "GoAMPP — Native Windows local dev stack")
@@ -1797,22 +1451,12 @@ func buildSettingsPage(parent *ui.Control) {
 	})
 }
 
-// ----- Projects page ----------------------------------------------------
-
-// buildProjectsPage draws the scaffold UI: framework picker + project
-// name input + domain + Create button, plus a ListView of existing
-// projects pulled from app.cfg.Projects.
 func buildProjectsPage(parent *ui.Control) {
-	// Framework picker row.
+
 	ui.NewStatic(parent, ui.OptsStatic().
 		Text("Framework:").
 		Position(ui.Dpi(10, 34)))
 
-	// Build the framework name list at construction time and pass it
-	// via .Texts(...) — windigo only actually creates the underlying
-	// HWND on WM_CREATE, so AddItem() calls in build code are silent
-	// no-ops (they SendMessage to a null hwnd). Texts() bakes the
-	// list into the create-time options so the items appear.
 	frameworkNames := make([]string, len(Frameworks))
 	for i, f := range Frameworks {
 		frameworkNames[i] = f.Name
@@ -1823,8 +1467,6 @@ func buildProjectsPage(parent *ui.Control) {
 		Texts(frameworkNames...).
 		Select(0))
 
-	// Project name. Slug-friendly — we strip non-alphanumerics in
-	// onCreateProject so the user can type anything here.
 	ui.NewStatic(parent, ui.OptsStatic().
 		Text("Name:").
 		Position(ui.Dpi(305, 34)))
@@ -1832,9 +1474,6 @@ func buildProjectsPage(parent *ui.Control) {
 		Position(ui.Dpi(345, 30)).
 		Width(ui.DpiX(110)))
 
-	// Domain: split into a free-form name input + a dropdown of
-	// dev-friendly TLDs (.test by default). The full domain we
-	// register is `name + ext`, e.g. "myapp" + ".test" = "myapp.test".
 	ui.NewStatic(parent, ui.OptsStatic().
 		Text("Domain:").
 		Position(ui.Dpi(465, 34)))
@@ -1847,7 +1486,6 @@ func buildProjectsPage(parent *ui.Control) {
 		Texts(domainExtensions...).
 		Select(0))
 
-	// Create button — the whole point of this page.
 	newColoredButton(parent, ui.OptsButton().
 		Text("Create Project").
 		Position(ui.Dpi(705, 28)).
@@ -1857,15 +1495,12 @@ func buildProjectsPage(parent *ui.Control) {
 		onCreateProject()
 	})
 
-	// Runtime status row — tells the user what's available on their
-	// system and what the scaffolder will be able to use.
 	runtimeY := 66
 	ui.NewStatic(parent, ui.OptsStatic().
 		Text("Runtime status: "+runtimeStatusText()).
 		Position(ui.Dpi(10, runtimeY)).
 		Size(ui.Dpi(contentW-20, 16)))
 
-	// Existing-projects list.
 	ui.NewStatic(parent, ui.OptsStatic().
 		Text("Existing projects (drops in www/):").
 		Position(ui.Dpi(10, runtimeY+24)))
@@ -1879,7 +1514,6 @@ func buildProjectsPage(parent *ui.Control) {
 		Column("Domain", ui.DpiX(160)).
 		Column("Document Root", ui.DpiX(340)))
 
-	// Actions for the selected project.
 	btnY := runtimeY + 44 + 178
 	x := 10
 	addBtn := func(label string, w int, scheme ColorScheme, onClick func()) {
@@ -1914,9 +1548,6 @@ func buildProjectsPage(parent *ui.Control) {
 	})
 }
 
-// runtimeStatusText produces a one-liner showing which framework
-// runtimes are available. Used at the top of the Projects page so
-// users know what they can scaffold without guessing.
 func runtimeStatusText() string {
 	var parts []string
 	check := func(label, tool string) {
@@ -1935,9 +1566,6 @@ func runtimeStatusText() string {
 	return strings.Join(parts, "   ")
 }
 
-// onCreateProject is wired to the "Create Project" button. Reads
-// the form fields, sanitises them, then runs createProject off the
-// UI thread so the scaffold doesn't freeze the window.
 func onCreateProject() {
 	fname := projFramework.CurrentText()
 	if fname == "" {
@@ -1954,12 +1582,9 @@ func onCreateProject() {
 		app.appendLog("projects: project name required")
 		return
 	}
-	// Slugify: keep alphanumerics, replace anything else with "-".
+
 	name = slugify(name)
 
-	// Domain: optional name override + required extension. If the
-	// name field is empty we default to the project slug, so the
-	// usual case "type project name → click Create" still works.
 	domainName := strings.TrimSpace(projDomainNm.Text())
 	if domainName == "" {
 		domainName = name
@@ -1984,11 +1609,6 @@ func onCreateProject() {
 	}()
 }
 
-// splitDomain breaks a "name.ext" string into ("name", ".ext"). The
-// split is on the LAST dot so multi-part names like "api.myapp.test"
-// round-trip cleanly: name="api.myapp", ext=".test". Domains with no
-// dot at all return ("name", ".test") so the caller still has a
-// usable extension default.
 func splitDomain(domain string) (string, string) {
 	domain = strings.TrimSpace(domain)
 	i := strings.LastIndex(domain, ".")
@@ -1998,10 +1618,6 @@ func splitDomain(domain string) (string, string) {
 	return domain[:i], domain[i:]
 }
 
-// setDomainExtSelection picks the matching item in the extension
-// combobox for the given ".ext" string. Falls back to index 0
-// (.test) when the extension isn't in our curated list — keeps the
-// dropdown deterministic instead of showing a stale leftover.
 func setDomainExtSelection(combo *ui.ComboBox, ext string) {
 	if combo == nil {
 		return
@@ -2015,9 +1631,6 @@ func setDomainExtSelection(combo *ui.ComboBox, ext string) {
 	combo.SelectIndex(0)
 }
 
-// slugify turns "My App" into "my-app" — lowercase, alphanumerics
-// and dashes only. Used as the directory name + default subdomain
-// so projects don't land in paths that break Apache.
 func slugify(s string) string {
 	s = strings.ToLower(strings.TrimSpace(s))
 	var b strings.Builder
@@ -2037,7 +1650,6 @@ func slugify(s string) string {
 	return strings.TrimRight(b.String(), "-")
 }
 
-// refreshProjectList rebuilds the Projects ListView from config.
 func refreshProjectList() {
 	if projList == nil {
 		return
@@ -2048,8 +1660,6 @@ func refreshProjectList() {
 	}
 }
 
-// selectedProjectIndex returns the first selected row in the
-// projects ListView, or -1.
 func selectedProjectIndex() int {
 	if projList == nil {
 		return -1
@@ -2065,9 +1675,6 @@ func selectedProjectIndex() int {
 	return idx
 }
 
-// deleteProject removes a project's directory, drops its vhost,
-// saves config, re-applies vhosts. Leaves downloaded archives in
-// place so a re-create is fast.
 func deleteProject(idx int) {
 	if idx < 0 || idx >= len(app.cfg.Projects) {
 		return
@@ -2078,11 +1685,11 @@ func deleteProject(idx int) {
 	app.appendLog(fmt.Sprintf("projects: deleting '%s' (%s)...", p.Name, p.Domain))
 	if err := os.RemoveAll(projectDir); err != nil {
 		app.appendLog("projects delete: " + err.Error())
-		// Continue anyway — user can remove manually.
+
 	}
-	// Drop from config.
+
 	app.cfg.Projects = append(app.cfg.Projects[:idx], app.cfg.Projects[idx+1:]...)
-	// Drop matching vhost.
+
 	for i := len(app.cfg.Vhosts) - 1; i >= 0; i-- {
 		if app.cfg.Vhosts[i].Domain == p.Domain {
 			app.cfg.Vhosts = append(app.cfg.Vhosts[:i], app.cfg.Vhosts[i+1:]...)
@@ -2096,10 +1703,6 @@ func deleteProject(idx int) {
 	refreshVhostList()
 }
 
-// ----- Log panel ---------------------------------------------------------
-
-// buildLogPanel creates the read-only multi-line Edit that always sits
-// at the bottom of the window, regardless of which page is active.
 func buildLogPanel(wnd *ui.Main) {
 	ui.NewStatic(wnd, ui.OptsStatic().
 		Text("Logs").
@@ -2112,18 +1715,13 @@ func buildLogPanel(wnd *ui.Main) {
 		Layout(ui.LAY_HOLD_RESIZE))
 }
 
-// ----- Shared helpers ----------------------------------------------------
-
-// startService runs Start() on a service, auto-downloading first if the
-// exe is missing. Shared between the Start button and Start All Enabled.
 func startService(idx int) {
 	if idx < 0 || idx >= len(app.services) {
 		return
 	}
 	ms := app.services[idx]
 	if ms.Service == nil {
-		// Tool-only entries (phpMyAdmin, Adminer) — install if missing,
-		// otherwise just open the admin URL.
+
 		if _, ok := DownloadCatalog[ms.Conf.Name]; ok && !IsInstalled(ms.Conf.Name, app.baseDir) {
 			downloadInBackground(ms.Conf.Name)
 			return
@@ -2133,24 +1731,12 @@ func startService(idx int) {
 		}
 		return
 	}
-	// Two failure modes the sentinel catches:
-	//   1. Service was never installed at all (exe missing).
-	//   2. Partial install — exe is there but the install is otherwise
-	//      busted (e.g. Apache has bin/httpd.exe but no conf/httpd.conf
-	//      because AV quarantined the rest of the zip, or MySQL has
-	//      mysqld.exe but data/mysql/ was never seeded by install-db).
-	// Both look the same to the user and both demand the same fix:
-	// re-run DownloadAndInstall, which wipes InstallDir and re-extracts.
+
 	_, hasCatalog := DownloadCatalog[ms.Conf.Name]
 	if hasCatalog && !IsInstalled(ms.Conf.Name, app.baseDir) {
 		name := ms.Conf.Name
 		svc := ms.Service
-		// If the user previously picked a specific version (PHP 8.2,
-		// Node 20, etc.), honour that — installing the catalogue's
-		// default would overwrite their choice and, worse, try to
-		// MkdirAll the canonical InstallDir which is now a junction
-		// to bin/<svc>-<version>. Pass the saved ActiveVersion so the
-		// install lands in the correct bin/<svc>-<version>/ tree.
+
 		version := ms.Conf.ActiveVersion
 		app.appendLog(fmt.Sprintf("[%s] install incomplete — auto-reinstalling...", name))
 		go func() {
@@ -2165,7 +1751,7 @@ func startService(idx int) {
 		}()
 		return
 	}
-	// Skip stat check for bare commands resolved via PATH (e.g. "cmd.exe").
+
 	if filepath.IsAbs(ms.Service.ExePath) {
 		if _, err := os.Stat(ms.Service.ExePath); err != nil {
 			app.appendLog(fmt.Sprintf("[%s] exe missing: %s", ms.Conf.Name, ms.Service.ExePath))
@@ -2177,14 +1763,6 @@ func startService(idx int) {
 	}
 }
 
-// (toggleSelectedService and forSelectedService were removed when
-// the Services page switched from a ListView to a card grid. Each
-// card now wires its own button-click handlers directly via
-// closures, so there's no "currently selected service" concept to
-// hand off to a generic helper.)
-
-// selectedVhostIndex returns the first selected row in the vhost list,
-// or -1 if nothing is selected.
 func selectedVhostIndex() int {
 	if vhostList == nil {
 		return -1
@@ -2196,10 +1774,6 @@ func selectedVhostIndex() int {
 	return sel[0].Index()
 }
 
-// readVhostForm parses the inline vhost editor fields into a Vhost
-// struct, validating port and required fields. The domain is
-// reassembled from the split name + extension widgets — e.g.
-// "myapp" + ".test" → "myapp.test".
 func readVhostForm() (Vhost, error) {
 	name := strings.TrimSpace(vhostDomainNm.Text())
 	if name == "" {
@@ -2234,8 +1808,6 @@ func readVhostForm() (Vhost, error) {
 	}, nil
 }
 
-// reloadConfig re-reads config.json and rebuilds the services slice,
-// reusing live Service runtime objects for names that still exist.
 func reloadConfig() error {
 	cfg, err := LoadConfig(app.baseDir)
 	if err != nil {
@@ -2268,8 +1840,6 @@ func reloadConfig() error {
 	return nil
 }
 
-// countEnabledServices returns how many services in the config have
-// enabled:true. Used by the Settings page summary.
 func countEnabledServices() int {
 	n := 0
 	for _, s := range app.cfg.Services {
@@ -2280,9 +1850,6 @@ func countEnabledServices() int {
 	return n
 }
 
-// downloadInBackground fires a DownloadAndInstall on a goroutine and
-// refreshes the services list on completion so the "Installed" column
-// flips from "no" to "yes".
 func downloadInBackground(name string) {
 	if _, ok := DownloadCatalog[name]; !ok {
 		app.appendLog(fmt.Sprintf("[%s] no download recipe", name))
@@ -2299,8 +1866,6 @@ func downloadInBackground(name string) {
 	}()
 }
 
-// uninstallService wipes a service's install directory. Won't touch a
-// running process — the user has to Stop it first.
 func uninstallService(idx int) {
 	if idx < 0 || idx >= len(app.services) {
 		return

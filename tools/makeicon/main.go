@@ -52,14 +52,12 @@ func main() {
 	}
 	srcPath, dstPath := os.Args[1], os.Args[2]
 
-	// Decode the source PNG.
 	f, err := os.Open(srcPath)
 	must(err)
 	defer f.Close()
 	src, err := png.Decode(f)
 	must(err)
 
-	// Generate one resized PNG per target size.
 	entries := make([][]byte, 0, len(targetSizes))
 	for _, sz := range targetSizes {
 		resized := resizeTo(src, sz, sz)
@@ -72,17 +70,16 @@ func main() {
 	var out bytes.Buffer
 	must(binary.Write(&out, binary.LittleEndian, iconDir{
 		Reserved: 0,
-		Type:     1, // ICO
+		Type:     1,
 		Count:    uint16(len(entries)),
 	}))
 
-	// The offset for the first image = 6-byte header + N*16-byte entries.
 	offset := uint32(6 + 16*len(entries))
 	for i, data := range entries {
 		sz := targetSizes[i]
 		var w, h uint8
 		if sz >= 256 {
-			w, h = 0, 0 // 0 = 256 in the ICO format
+			w, h = 0, 0
 		} else {
 			w, h = uint8(sz), uint8(sz)
 		}
@@ -98,7 +95,7 @@ func main() {
 		}))
 		offset += uint32(len(data))
 	}
-	// Image blobs follow in the same order as the entries.
+
 	for _, data := range entries {
 		out.Write(data)
 	}

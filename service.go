@@ -16,17 +16,14 @@ import (
 	"time"
 )
 
-// Service represents a managed background process (Apache, MySQL, etc).
 type Service struct {
-	Name     string // e.g. "Apache"
-	ExePath  string // e.g. "bin/apache/httpd.exe"
-	Args     []string
-	Port     int // port to probe for status ("is it up?")
-	WorkDir  string
-	// Env is additional environment variables merged into the child process
-	// environment. Each entry is "KEY=VALUE". Used by e.g. RabbitMQ to set
-	// ERLANG_HOME without polluting the system environment.
-	Env      []string
+	Name    string
+	ExePath string
+	Args    []string
+	Port    int
+	WorkDir string
+
+	Env []string
 
 	mu      sync.Mutex
 	cmd     *exec.Cmd
@@ -34,14 +31,10 @@ type Service struct {
 	onState func(running bool, pid int)
 }
 
-// SetLogger registers a callback invoked for every log line produced by the
-// service (stdout + stderr) and by the manager itself (start/stop messages).
 func (s *Service) SetLogger(fn func(line string)) {
 	s.onLog = fn
 }
 
-// SetStateCallback registers a callback invoked when the service starts or
-// stops. pid is 0 when the service is not running.
 func (s *Service) SetStateCallback(fn func(running bool, pid int)) {
 	s.onState = fn
 }
@@ -52,14 +45,12 @@ func (s *Service) log(format string, a ...any) {
 	}
 }
 
-// Running reports whether the managed process is currently alive.
 func (s *Service) Running() bool {
 	s.mu.Lock()
 	defer s.mu.Unlock()
 	return s.cmd != nil && s.cmd.Process != nil
 }
 
-// PID returns the process ID of the running service, or 0 if stopped.
 func (s *Service) PID() int {
 	s.mu.Lock()
 	defer s.mu.Unlock()
@@ -69,14 +60,6 @@ func (s *Service) PID() int {
 	return 0
 }
 
-// Start launches the service. Returns an error if the exe is missing, the
-// port is already in use, or the process fails to spawn.
-//
-// CRITICAL: the mutex is released before any user callbacks (onState,
-// s.log) fire, because those callbacks marshal to the UI thread, which
-// can then call Running() / PID() — both of which take this same mutex.
-// Holding the lock across a UI round-trip deadlocks the process since
-// Go sync.Mutex isn't reentrant.
 func (s *Service) Start() error {
 	s.mu.Lock()
 
@@ -95,21 +78,16 @@ func (s *Service) Start() error {
 	if s.WorkDir != "" {
 		cmd.Dir = s.WorkDir
 	}
-	// Detach from console so the child doesn't pop up a window.
+
 	cmd.SysProcAttr = &syscall.SysProcAttr{
 		HideWindow:    true,
-		CreationFlags: 0x08000000, // CREATE_NO_WINDOW
+		CreationFlags: 0x08000000,
 	}
 
-	// Merge per-service extra environment variables into the child's env.
 	if len(s.Env) > 0 {
 		cmd.Env = append(os.Environ(), s.Env...)
 	}
 
-	// PostgreSQL refuses to start when the process token has the
-	// Administrators SID enabled (pgwin32_is_admin() check in main.c).
-	// Since we are running as an elevated process, we use the official
-	// pg_ctl.exe tool to safely drop privileges and launch the server.
 	if s.Name == "PostgreSQL" {
 		var dataDir string
 		for i, arg := range s.Args {
@@ -123,26 +101,19 @@ func (s *Service) Start() error {
 			return fmt.Errorf("PostgreSQL data directory (-D) not found in arguments")
 		}
 
-		// Prevent duplicate start attempts by creating a placeholder cmd
-		// immediately under the lock. This keeps the UI responsive but disables
-		// the "Start" button since s.Running() is immediately true.
 		placeholderCmd := exec.Command(s.ExePath, s.Args...)
-		// Create a dummy process handle so s.cmd.Process is not nil
+
 		placeholderCmd.Process, _ = os.FindProcess(os.Getpid())
 		s.cmd = placeholderCmd
 		onState := s.onState
 		s.mu.Unlock()
 
-		// Clean up postmaster.pid first to ensure we detect the new one
 		pidFile := filepath.Join(dataDir, "postmaster.pid")
 		_ = os.Remove(pidFile)
 
-		// Run in the background to prevent blocking the UI thread.
 		go func() {
 			s.log("launching postgres.exe directly in the background...")
 
-			// Format command: runas /trustlevel:0x20000 "\"path\to\goampp.exe\" --hide-run \"path\to\postgres.exe\" -D \"path\to\data\""
-			// This routes the startup through our own GUI application wrapper to prevent conhost/cmd windows from opening.
 			var cmdString string
 			selfExe, err := os.Executable()
 			if err == nil {
@@ -156,7 +127,7 @@ func (s *Service) Start() error {
 			}
 			startCmd.SysProcAttr = &syscall.SysProcAttr{
 				HideWindow:    true,
-				CreationFlags: 0x08000000, // CREATE_NO_WINDOW
+				CreationFlags: 0x08000000,
 			}
 
 			if err := startCmd.Start(); err != nil {
@@ -172,7 +143,6 @@ func (s *Service) Start() error {
 				return
 			}
 
-			// Read the real process ID from postmaster.pid
 			pid, err := readPostmasterPID(dataDir)
 			if err != nil {
 				s.log("failed to read postmaster PID: %v", err)
@@ -188,13 +158,12 @@ func (s *Service) Start() error {
 			}
 
 			s.mu.Lock()
-			// Check if we were stopped while starting
+
 			if s.cmd != placeholderCmd {
 				s.mu.Unlock()
 				return
 			}
 
-			// Attach the real postmaster process to our command
 			placeholderCmd.Process, _ = os.FindProcess(pid)
 			s.mu.Unlock()
 
@@ -203,14 +172,12 @@ func (s *Service) Start() error {
 				onState(true, pid)
 			}
 
-			// Start tailing the log file in a background goroutine
 			stopTail := make(chan struct{})
 			go s.tailPostgresLog(dataDir, stopTail)
 
-			// Watcher goroutine: monitor the running database process and notify on exit
 			go func() {
 				state, _ := placeholderCmd.Process.Wait()
-				close(stopTail) // Stop tailing log when process exits
+				close(stopTail)
 
 				s.mu.Lock()
 				if s.cmd == placeholderCmd {
@@ -237,9 +204,6 @@ func (s *Service) Start() error {
 		return nil
 	}
 
-	// Capture stdout and stderr so users can see *why* a service failed.
-	// Without this, Apache's "AH00072: make_sock: could not bind to..."
-	// messages go straight to /dev/null and the user just sees "exit 1".
 	stdout, err := cmd.StdoutPipe()
 	if err != nil {
 		s.mu.Unlock()
@@ -257,34 +221,27 @@ func (s *Service) Start() error {
 	}
 	s.cmd = cmd
 	pid := cmd.Process.Pid
-	onState := s.onState // snapshot under the lock
+	onState := s.onState
 	s.mu.Unlock()
 
-	// From here down we're mutex-free, so the callbacks are free to
-	// bounce through the UI thread and call Running()/PID() on us.
 	s.log("started (pid %d)", pid)
 	if onState != nil {
 		onState(true, pid)
 	}
 
-	// Pipe both streams into the same log. We don't bother distinguishing
-	// stdout from stderr in the log prefix — most services only use one.
 	go streamToLog(stdout, s.log)
 	go streamToLog(stderr, s.log)
 
-	// Watcher goroutine: notify when the process exits on its own.
 	go func(c *exec.Cmd) {
 		werr := c.Wait()
 		s.mu.Lock()
-		// Only clear state if this is still the current process.
+
 		if s.cmd == c {
 			s.cmd = nil
 		}
 		cb := s.onState
 		s.mu.Unlock()
 
-		// Callback happens OUTSIDE the lock for the same reentrancy
-		// reason as above.
 		if werr != nil {
 			s.log("exited: %v", werr)
 		} else {
@@ -298,12 +255,6 @@ func (s *Service) Start() error {
 	return nil
 }
 
-// Stop terminates the running service. A no-op if not running.
-//
-// Apache's winnt MPM (and a few other services) forks a worker child
-// that keeps running — and keeps holding its port — even after the
-// parent process dies. A plain cmd.Process.Kill only touches the
-// parent, so we use `taskkill /F /T /PID` to nuke the whole tree.
 func (s *Service) Stop() error {
 	s.mu.Lock()
 	cmd := s.cmd
@@ -314,7 +265,6 @@ func (s *Service) Stop() error {
 	}
 	pid := cmd.Process.Pid
 
-	// Use official pg_ctl to stop PostgreSQL cleanly
 	if s.Name == "PostgreSQL" {
 		s.log("stopping (pid %d) via pg_ctl...", pid)
 		pgCtlPath := filepath.Join(filepath.Dir(s.ExePath), "pg_ctl.exe")
@@ -334,7 +284,7 @@ func (s *Service) Stop() error {
 			out, err := stopCmd.CombinedOutput()
 			if err != nil {
 				s.log("pg_ctl stop failed: %v (output: %q)", err, string(out))
-				// Fall back to standard taskkill below
+
 			} else {
 				return nil
 			}
@@ -343,18 +293,15 @@ func (s *Service) Stop() error {
 
 	s.log("stopping (pid %d)...", pid)
 
-	// taskkill /F /T /PID <pid> = force-kill the process AND all children.
-	// We don't bother checking its exit code — if taskkill itself fails,
-	// cmd.Process.Kill is a reasonable fallback.
 	kill := exec.Command("taskkill", "/F", "/T", "/PID", fmt.Sprint(pid))
 	kill.SysProcAttr = &syscall.SysProcAttr{HideWindow: true, CreationFlags: 0x08000000}
 	if err := kill.Run(); err != nil {
-		// Fall back to the single-process kill; at least the parent dies.
+
 		if err2 := cmd.Process.Kill(); err2 != nil {
 			return fmt.Errorf("kill %s: taskkill=%v, proc.Kill=%v", s.Name, err, err2)
 		}
 	}
-	// Watcher goroutine will handle the state update.
+
 	return nil
 }
 
@@ -362,7 +309,7 @@ func readPostmasterPID(dataDir string) (int, error) {
 	pidFile := filepath.Join(dataDir, "postmaster.pid")
 	var data []byte
 	var err error
-	// Try reading up to 10 times with a brief sleep, in case pg_ctl is still writing the file
+
 	for i := 0; i < 10; i++ {
 		data, err = os.ReadFile(pidFile)
 		if err == nil && len(data) > 0 {
@@ -385,7 +332,6 @@ func readPostmasterPID(dataDir string) (int, error) {
 	return pid, nil
 }
 
-// isPortBusy returns true if the given TCP port is already bound on localhost.
 func isPortBusy(port int) bool {
 	addr := fmt.Sprintf("127.0.0.1:%d", port)
 	ln, err := net.Listen("tcp", addr)
@@ -393,18 +339,14 @@ func isPortBusy(port int) bool {
 		return true
 	}
 	_ = ln.Close()
-	// Tiny delay to let the socket fully release before a subsequent bind.
+
 	time.Sleep(10 * time.Millisecond)
 	return false
 }
 
-// streamToLog reads from a process's stdout/stderr pipe line-by-line and
-// forwards each non-empty line to the service logger. Trimming \r handles
-// Apache's \r\n line endings cleanly so log entries don't have gaps.
 func streamToLog(r io.Reader, logf func(format string, a ...any)) {
 	sc := bufio.NewScanner(r)
-	// httpd.conf errors with long include paths can blow past the default
-	// 64 KB scanner line limit. Bump it.
+
 	sc.Buffer(make([]byte, 0, 64*1024), 1<<20)
 	for sc.Scan() {
 		line := strings.TrimRight(sc.Text(), "\r")
@@ -414,13 +356,10 @@ func streamToLog(r io.Reader, logf func(format string, a ...any)) {
 	}
 }
 
-// tailPostgresLog runs in the background, tails the active PostgreSQL log file,
-// and streams its output in real-time to the GoAMPP log panel.
 func (s *Service) tailPostgresLog(dataDir string, stopCh <-chan struct{}) {
 	var logFilePath string
 	currentLogfile := filepath.Join(dataDir, "current_logfiles")
 
-	// Poll up to 20 times (4 seconds) for the log file to appear
 	for i := 0; i < 20; i++ {
 		select {
 		case <-stopCh:
@@ -428,7 +367,6 @@ func (s *Service) tailPostgresLog(dataDir string, stopCh <-chan struct{}) {
 		default:
 		}
 
-		// Try current_logfiles first
 		if data, err := os.ReadFile(currentLogfile); err == nil && len(data) > 0 {
 			lines := strings.Split(string(data), "\n")
 			for _, line := range lines {
@@ -441,7 +379,6 @@ func (s *Service) tailPostgresLog(dataDir string, stopCh <-chan struct{}) {
 			}
 		}
 
-		// Fallback: list log/ directory and find the newest file
 		if logFilePath == "" {
 			logDir := filepath.Join(dataDir, "log")
 			files, err := os.ReadDir(logDir)
@@ -516,16 +453,13 @@ func (s *Service) tailPostgresLog(dataDir string, stopCh <-chan struct{}) {
 	}
 }
 
-// logPostgresLine cleans up PostgreSQL log messages by stripping the long timestamps
-// and PID prefixes, forwarding a clean and professional entry (e.g. LOG: ..., ERROR: ...) to s.log.
 func (s *Service) logPostgresLine(line string) {
-	// Look for the level delimiter ":  "
+
 	idx := strings.Index(line, ":  ")
 	if idx != -1 {
 		prefix := line[:idx]
 		msg := line[idx+3:]
 
-		// Extract level (the last word in prefix, e.g. "LOG", "WARNING", "ERROR", etc.)
 		words := strings.Fields(prefix)
 		if len(words) > 0 {
 			level := words[len(words)-1]

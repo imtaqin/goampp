@@ -47,7 +47,7 @@ type logo struct {
 }
 
 var logos = []logo{
-	// ----- Services (long-running processes) -----
+
 	{
 		service:     "Apache",
 		localName:   "Apache",
@@ -115,7 +115,6 @@ var logos = []logo{
 		outName:     "mailpit.ico",
 	},
 
-	// ----- Frameworks (scaffoldable projects) -----
 	{
 		service:     "Laravel",
 		localName:   "Laravel",
@@ -135,7 +134,6 @@ var logos = []logo{
 		outName:     "wordpress.ico",
 	},
 
-	// ----- Runtimes (language / platform) -----
 	{
 		service:     "Erlang",
 		localName:   "erlang",
@@ -240,7 +238,7 @@ var logos = []logo{
 	},
 	{
 		service:     "Python",
-		localName:   "Python", // user doesn't have this one — will download
+		localName:   "Python",
 		fallbackURL: "https://upload.wikimedia.org/wikipedia/commons/thumb/c/c3/Python-logo-notext.svg/512px-Python-logo-notext.svg.png",
 		outName:     "python.ico",
 	},
@@ -279,8 +277,6 @@ func main() {
 		die("mkdir: " + err.Error())
 	}
 
-	// Wipe so stale icons from an older run don't leak into the build.
-	// Users can still keep their PNGs under icon/ unchanged.
 	for _, l := range logos {
 		_ = os.Remove(filepath.Join(outDir, l.outName))
 	}
@@ -296,7 +292,6 @@ func main() {
 			err    error
 		)
 
-		// Prefer the local PNG if the user dropped one in icon/.
 		localPath := filepath.Join("icon", l.localName+".png")
 		if _, statErr := os.Stat(localPath); statErr == nil {
 			src, err = readLocalPNG(localPath)
@@ -344,7 +339,7 @@ func downloadImage(client *http.Client, url string) (image.Image, error) {
 	if err != nil {
 		return nil, err
 	}
-	// Wikimedia rejects empty UAs.
+
 	req.Header.Set("User-Agent", "GoAMPP-makelogos/0.1 (+https://github.com/goampp)")
 	resp, err := client.Do(req)
 	if err != nil {
@@ -365,10 +360,7 @@ func downloadImage(client *http.Client, url string) (image.Image, error) {
 // encodeIco resizes src to a square `size`-pixel PNG and wraps it in
 // the minimal ICO header.
 func encodeIco(src image.Image, size int) ([]byte, error) {
-	// Center the source in a square canvas so non-square PNGs
-	// (like the Nginx wordmark at 330×70) don't get horribly
-	// squashed. We scale the larger dimension to fit size and
-	// center along the smaller one.
+
 	sb := src.Bounds()
 	sw, sh := sb.Dx(), sb.Dy()
 	scale := float64(size) / float64(sw)
@@ -397,7 +389,7 @@ func encodeIco(src image.Image, size int) ([]byte, error) {
 	})
 	var w, h uint8
 	if size >= 256 {
-		w, h = 0, 0 // 0 means 256 in the ICO format
+		w, h = 0, 0
 	} else {
 		w, h = uint8(size), uint8(size)
 	}
