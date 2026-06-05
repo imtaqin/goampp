@@ -1001,7 +1001,6 @@ var langBinDirs = map[string][]string{
 	"Julia":    {"bin/julia/bin"},
 	"Zig":      {"bin/zig"},
 	"Dart":     {"bin/dart/bin"},
-	"Idris2":   {"bin/idris2/bin"},
 	"Lua":      {"bin/lua"},
 	"Ruby":     {"bin/ruby/bin"},
 	"Rust":     {"bin/rust/.cargo/bin"},
@@ -1766,6 +1765,35 @@ func buildSettingsPage(parent *ui.Control) {
 	})
 	addBtn("Quit GoAMPP", SchemeDanger, func() {
 		quitApp(app.wnd)
+	})
+
+	// ----- About --------------------------------------------------
+	y = rowY + btnH + gapY + 16
+	section("ABOUT")
+	row("Project", "GoAMPP — Native Windows local dev stack")
+	row("Author", "imtaqin (fdciabdul)")
+	row("Version", "v0.6.1")
+	row("GitHub", "https://github.com/imtaqin/goampp")
+	row("Website", "https://imtaqin.id")
+
+	y += 4
+	donateBtn := newColoredButton(parent, ui.OptsButton().
+		Text("☕ Donate via Saweria").
+		Position(ui.Dpi(col0, y)).
+		Width(ui.DpiX(200)).Height(ui.DpiY(btnH)),
+		SchemeSuccess)
+	donateBtn.On().BnClicked(func() {
+		openPath("https://saweria.co/fdciabdul")
+	})
+	y += btnH + gapY
+
+	ghBtn := newColoredButton(parent, ui.OptsButton().
+		Text("★ Star on GitHub").
+		Position(ui.Dpi(col0+210, y-btnH-gapY)).
+		Width(ui.DpiX(160)).Height(ui.DpiY(btnH)),
+		SchemePrimary)
+	ghBtn.On().BnClicked(func() {
+		openPath("https://github.com/imtaqin/goampp")
 	})
 }
 

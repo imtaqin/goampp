@@ -356,10 +356,6 @@ func DefaultConfig(baseDir string) *Config {
 				Enabled: false,
 			},
 			{
-				Name: "Idris2", Kind: "runtime",
-				Enabled: false,
-			},
-			{
 				Name: "Lua", Kind: "runtime",
 				Enabled: false,
 			},

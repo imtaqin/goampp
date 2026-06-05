@@ -49,7 +49,6 @@ var serviceIconFiles = map[string]string{
 	"Julia":      "julia.ico",
 	"Zig":        "zig.ico",
 	"Dart":       "dart.ico",
-	"Idris2":     "idris2.ico",
 	"Lua":        "lua.ico",
 	"Ruby":       "ruby.ico",
 	"Rust":       "rust.ico",

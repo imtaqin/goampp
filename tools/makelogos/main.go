@@ -161,12 +161,6 @@ var logos = []logo{
 		outName:     "dart.ico",
 	},
 	{
-		service:     "Idris2",
-		localName:   "idris2",
-		fallbackURL: "https://icon.icepanel.io/Technology/png-shadow-512/Idris2.png",
-		outName:     "idris2.ico",
-	},
-	{
 		service:     "Lua",
 		localName:   "Lua",
 		fallbackURL: "https://icon.icepanel.io/Technology/png-shadow-512/Lua.png",
