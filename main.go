@@ -145,7 +145,7 @@ func main() {
 		ui.OptsStatusBar().
 			FixedPart(ui.DpiX(220), "Ready").
 			FlexPart(1, truncateMid(baseDir, 70)).
-			FixedPart(ui.DpiX(90), "GoAMPP v0.6.1"),
+			FixedPart(ui.DpiX(90), "GoAMPP v0.6.2"),
 	)
 
 	wnd.On().WmCreate(func(p ui.WmCreate) int {
