@@ -1001,6 +1001,13 @@ func DownloadAndInstallVersion(name, version, baseDir string, log func(string), 
 	}
 
 	log(fmt.Sprintf("[%s] install complete", name))
+
+	if n, err := AddGoamppToUserPath(); err != nil {
+		log(fmt.Sprintf("[%s] PATH update skipped: %v", name, err))
+	} else if n > 0 {
+		log(fmt.Sprintf("[%s] added %d bin dir(s) to user PATH — open a new terminal to use them", name, n))
+	}
+
 	progress("done", name, 0, 0)
 	time.Sleep(500 * time.Millisecond)
 	progress("idle", name, 0, 0)
