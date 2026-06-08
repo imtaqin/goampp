@@ -67,6 +67,50 @@ func goamppPathDirs() []string {
 	return out
 }
 
+func machinePathDirs() map[string]bool {
+	k, err := registry.OpenKey(registry.LOCAL_MACHINE,
+		`SYSTEM\CurrentControlSet\Control\Session Manager\Environment`,
+		registry.QUERY_VALUE)
+	if err != nil {
+		return nil
+	}
+	defer k.Close()
+	val, _, err := k.GetStringValue("Path")
+	if err != nil {
+		return nil
+	}
+	m := map[string]bool{}
+	for _, p := range strings.Split(val, ";") {
+		p = strings.TrimSpace(p)
+		if p != "" {
+			m[strings.ToLower(strings.ReplaceAll(p, `/`, `\`))] = true
+		}
+	}
+	return m
+}
+
+func exeConflictsWithDirs(goamppDir string, otherDirs map[string]bool) bool {
+	entries, err := os.ReadDir(goamppDir)
+	if err != nil {
+		return false
+	}
+	for _, e := range entries {
+		if e.IsDir() {
+			continue
+		}
+		lower := strings.ToLower(e.Name())
+		if !strings.HasSuffix(lower, ".exe") {
+			continue
+		}
+		for od := range otherDirs {
+			if _, err := os.Stat(filepath.Join(od, e.Name())); err == nil {
+				return true
+			}
+		}
+	}
+	return false
+}
+
 func AddGoamppToUserPath() (int, error) {
 	dirs := goamppPathDirs()
 	if len(dirs) == 0 {
@@ -95,10 +139,15 @@ func AddGoamppToUserPath() (int, error) {
 		}
 	}
 
+	machineDirs := machinePathDirs()
+
 	added := 0
 	for _, d := range dirs {
 		key := strings.ToLower(strings.ReplaceAll(d, `/`, `\`))
 		if existing[key] {
+			continue
+		}
+		if exeConflictsWithDirs(d, machineDirs) {
 			continue
 		}
 		parts = append(parts, d)
