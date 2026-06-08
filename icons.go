@@ -23,6 +23,7 @@ var serviceIconFiles = map[string]string{
 
 	"phpMyAdmin": "phpmyadmin.ico",
 	"Adminer":    "adminer.ico",
+	"Composer":   "composer.ico",
 	"pgweb":      "pgweb.ico",
 
 	"MinIO":    "minio.ico",

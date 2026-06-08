@@ -198,9 +198,12 @@ func DefaultConfig(baseDir string) *Config {
 				Enabled: true,
 			},
 			{
-
 				Name: "Adminer", Kind: "tool",
 				OpenURL: "http://localhost/adminer/",
+				Enabled: true,
+			},
+			{
+				Name: "Composer", Kind: "tool",
 				Enabled: true,
 			},
 			{

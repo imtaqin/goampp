@@ -474,6 +474,29 @@ var DownloadCatalog = map[string]DownloadSpec{
 		},
 	},
 
+	"Composer": {
+		Version:    "latest stable",
+		URL:        "https://getcomposer.org/composer-stable.phar",
+		FileName:   "composer-stable.phar",
+		InstallDir: "bin/php",
+		Kind:       "file",
+		TargetFile: "composer.phar",
+		CheckFile:  "composer.bat",
+		Notes:      "Composer — PHP dependency manager. Installs into bin/php alongside php.exe.",
+		PostInstall: func(installDir string, log func(string)) error {
+			bat := filepath.Join(installDir, "composer.bat")
+			if _, err := os.Stat(bat); err == nil {
+				return nil
+			}
+			content := "@echo off\r\nphp \"%~dp0composer.phar\" %*\r\n"
+			if err := os.WriteFile(bat, []byte(content), 0o644); err != nil {
+				return fmt.Errorf("write composer.bat: %w", err)
+			}
+			log("  created composer.bat wrapper")
+			return nil
+		},
+	},
+
 	"Node.js": {
 		Version:    "22.22.2 LTS",
 		URL:        "https://nodejs.org/dist/v22.22.2/node-v22.22.2-win-x64.zip",
