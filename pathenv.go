@@ -58,6 +58,12 @@ func goamppPathDirs() []string {
 			out = append(out, d)
 		}
 	}
+	if appdata := os.Getenv("APPDATA"); appdata != "" {
+		composerGlobal := filepath.Join(appdata, "Composer", "vendor", "bin")
+		if fi, err := os.Stat(composerGlobal); err == nil && fi.IsDir() {
+			out = append(out, composerGlobal)
+		}
+	}
 	return out
 }
 
