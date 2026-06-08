@@ -184,9 +184,9 @@ var DownloadCatalog = map[string]DownloadSpec{
 	},
 	"PHP-FPM": {
 
-		Version:    "8.5.6 NTS x64",
-		URL:        "https://downloads.php.net/~windows/releases/php-8.5.6-nts-Win32-vs17-x64.zip",
-		FileName:   "php-8.5.6-nts-Win32-vs17-x64.zip",
+		Version:    "8.4.22 NTS x64",
+		URL:        "https://windows.php.net/downloads/releases/php-8.4.22-nts-Win32-vs17-x64.zip",
+		FileName:   "php-8.4.22-nts-Win32-vs17-x64.zip",
 		InstallDir: "bin/php",
 
 		Variants: []VariantSpec{
@@ -195,8 +195,8 @@ var DownloadCatalog = map[string]DownloadSpec{
 			{Version: "8.1", URL: "https://windows.php.net/downloads/releases/archives/php-8.1.31-nts-Win32-vs16-x64.zip", FileName: "php-8.1.31-nts-Win32-vs16-x64.zip", Notes: "PHP 8.1 — VS16 (VS2019) runtime."},
 			{Version: "8.2", URL: "https://windows.php.net/downloads/releases/archives/php-8.2.27-nts-Win32-vs16-x64.zip", FileName: "php-8.2.27-nts-Win32-vs16-x64.zip", Notes: "PHP 8.2 — VS16 (VS2019) runtime."},
 			{Version: "8.3", URL: "https://windows.php.net/downloads/releases/archives/php-8.3.15-nts-Win32-vs16-x64.zip", FileName: "php-8.3.15-nts-Win32-vs16-x64.zip", Notes: "PHP 8.3 — VS16 (VS2019) runtime."},
-			{Version: "8.4", URL: "https://windows.php.net/downloads/releases/php-8.4.21-nts-Win32-vs17-x64.zip", FileName: "php-8.4.21-nts-Win32-vs17-x64.zip", Notes: "PHP 8.4 — VS17 (VS2022) runtime, v14.4+."},
-			{Version: "8.5", URL: "https://downloads.php.net/~windows/releases/php-8.5.6-nts-Win32-vs17-x64.zip", FileName: "php-8.5.6-nts-Win32-vs17-x64.zip", Notes: "PHP 8.5 — VS17 (VS2022) runtime, v14.4+."},
+			{Version: "8.4", URL: "https://windows.php.net/downloads/releases/php-8.4.22-nts-Win32-vs17-x64.zip", FileName: "php-8.4.22-nts-Win32-vs17-x64.zip", Notes: "PHP 8.4 — VS17 (VS2022) runtime, v14.4+."},
+			{Version: "8.5", URL: "https://downloads.php.net/~windows/releases/archives/php-8.5.7-nts-Win32-vs17-x64.zip", FileName: "php-8.5.7-nts-Win32-vs17-x64.zip", Notes: "PHP 8.5 — VS17 (VS2022) runtime, v14.4+."},
 		},
 		StripTop:  "",
 		Kind:      "zip",
