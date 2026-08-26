@@ -103,9 +103,9 @@ type VariantSpec struct {
 
 var DownloadCatalog = map[string]DownloadSpec{
 	"Apache": {
-		Version:    "2.4.67 (VS18, win64)",
-		URL:        "https://www.apachelounge.com/download/VS18/binaries/httpd-2.4.67-260504-Win64-VS18.zip",
-		FileName:   "httpd-2.4.67-260504-Win64-VS18.zip",
+		Version:    "2.4.68 (VS18, win64)",
+		URL:        "https://www.apachelounge.com/download/VS18/binaries/httpd-2.4.68-260617-Win64-VS18.zip",
+		FileName:   "httpd-2.4.68-260617-Win64-VS18.zip",
 		InstallDir: "bin/apache",
 		StripTop:   "Apache24/",
 		Kind:       "zip",
