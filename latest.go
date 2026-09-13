@@ -35,7 +35,7 @@ var (
 	latestCacheMu sync.Mutex
 	latestCache   = map[string]latestCacheEntry{}
 
-	installResolveMu    sync.Mutex
+	installResolveMu     sync.Mutex
 	resolvedFreshInstall = map[string]bool{}
 )
 
