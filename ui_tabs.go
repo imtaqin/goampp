@@ -30,7 +30,8 @@ const (
 	contentY = 48
 	contentW = 960
 
-	progH = 18
+	progH        = 18
+	logHeaderGap = 24
 
 	logX = 10
 	logW = 1080
@@ -61,7 +62,7 @@ func computeLayout() {
 
 	contentH = cardGridY + nrows*(cardH+cardGap) - cardGap + 16
 	progY = contentY + contentH + 8
-	logY = progY + progH + 8
+	logY = progY + progH + logHeaderGap
 	winH = logY + logH + 40
 }
 

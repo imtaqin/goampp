@@ -101,13 +101,12 @@ func main() {
 		ui.OptsMain().
 			Title("GoAMPP — Local Web Stack Control Panel").
 			Size(ui.Dpi(winW, winH)).
-			Style(co.WS_CAPTION | co.WS_SYSMENU | co.WS_CLIPCHILDREN |
-				co.WS_BORDER | co.WS_VISIBLE | co.WS_MINIMIZEBOX |
-				co.WS_MAXIMIZEBOX | co.WS_SIZEBOX).
+			Style(mainWindowStyle()).
 			ClassBrush(windowBgBrush()).
 			CmdShow(initialCmdShow),
 	)
 	app.wnd = wnd
+	configureMainWindowSizing(wnd)
 
 	wnd.On().WmDrawItem(handleDrawItem)
 
@@ -150,7 +149,7 @@ func main() {
 		ui.OptsStatusBar().
 			FixedPart(ui.DpiX(220), "Ready").
 			FlexPart(1, truncateMid(baseDir, 70)).
-			FixedPart(ui.DpiX(90), "GoAMPP v0.6.3"),
+			FixedPart(ui.DpiX(125), "GoAMPP v0.6.3"),
 	)
 
 	wnd.On().WmCreate(func(p ui.WmCreate) int {
