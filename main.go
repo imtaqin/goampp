@@ -140,6 +140,7 @@ func main() {
 	})
 
 	buildMainLayout(wnd)
+	installUpdateRefreshUI()
 
 	app.statusBar = ui.NewStatusBar(wnd,
 		ui.OptsStatusBar().
