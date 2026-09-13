@@ -188,10 +188,13 @@ func main() {
 		}
 
 		for _, name := range cfg.Settings.AutoStart {
-			if ms := app.findService(name); ms != nil && ms.Service != nil {
-				if err := ms.Service.Start(); err != nil {
-					app.appendLog(fmt.Sprintf("[auto-start] %s: %v", name, err))
-				}
+			ms := app.findService(name)
+			if !startupServiceEligible(ms) {
+				app.appendLog(fmt.Sprintf("[auto-start] skipping unavailable service %s", name))
+				continue
+			}
+			if err := ms.Service.Start(); err != nil {
+				app.appendLog(fmt.Sprintf("[auto-start] %s: %v", name, err))
 			}
 		}
 		return 0
@@ -215,13 +218,13 @@ func (a *App) findService(name string) *ManagedService {
 }
 
 func (a *App) appendLog(line string) {
-	a.logMu.Lock()
 	ts := time.Now().Format("15:04:05")
-	a.logBuf.WriteString(ts)
-	a.logBuf.WriteString(" ")
-	a.logBuf.WriteString(line)
-	a.logBuf.WriteString("\r\n")
+	entry := ts + " " + line + "\r\n"
 
+	a.logMu.Lock()
+	a.logBuf.WriteString(entry)
+
+	trimmed := false
 	if a.logBuf.Len() > maxLogBytes {
 		full := a.logBuf.String()
 		cut := len(full) / 4
@@ -231,6 +234,7 @@ func (a *App) appendLog(line string) {
 		}
 		a.logBuf.Reset()
 		a.logBuf.WriteString(full[cut:])
+		trimmed = true
 	}
 	text := a.logBuf.String()
 	a.logMu.Unlock()
@@ -239,12 +243,11 @@ func (a *App) appendLog(line string) {
 		return
 	}
 	a.wnd.UiThread(func() {
-		a.logBox.SetText(text)
-
-		const eot = uintptr(0x7FFFFFFF)
-		h := a.logBox.Hwnd()
-		h.SendMessage(co.EM_SETSEL, win.WPARAM(eot), win.LPARAM(eot))
-		h.SendMessage(co.EM_SCROLLCARET, 0, 0)
+		if trimmed {
+			resetLogBoxText(a, text)
+			return
+		}
+		appendLogBoxText(a, entry)
 	})
 }
 

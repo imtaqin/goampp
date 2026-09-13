@@ -242,6 +242,7 @@ func buildSidebar(wnd *ui.Main) {
 		{"projects", "Projects"},
 		{"editor", "Editor"},
 		{"vhosts", "Virtual Hosts"},
+		{"startup", "Startup"},
 		{"settings", "Settings"},
 	}
 	y := sideY
@@ -271,13 +272,15 @@ func buildPages(wnd *ui.Main) {
 		{key: "projects", title: "Projects", container: newPageContainer(wnd)},
 		{key: "editor", title: "Editor", container: newPageContainer(wnd)},
 		{key: "vhosts", title: "Virtual Hosts", container: newPageContainer(wnd)},
+		{key: "startup", title: "Startup", container: newPageContainer(wnd)},
 		{key: "settings", title: "Settings", container: newPageContainer(wnd)},
 	}
 	buildServicesPage(pages[0].container)
 	buildProjectsPage(pages[1].container)
 	buildEditorPage(pages[2].container)
 	buildVhostsPage(pages[3].container)
-	buildSettingsPage(pages[4].container)
+	buildStartupPage(pages[4].container)
+	buildSettingsPage(pages[5].container)
 	activePage = "services"
 }
 
@@ -1240,10 +1243,30 @@ func buildVhostsPage(parent *ui.Control) {
 		_ = SaveConfig(app.baseDir, app.cfg)
 		refreshVhostList()
 	})
+	addBtn("Enable / Disable", 126, SchemeWarning, func() {
+		idx := selectedVhostIndex()
+		if idx < 0 || idx >= len(app.cfg.Vhosts) {
+			app.appendLog("vhost: select a row to enable or disable")
+			return
+		}
+
+		v := &app.cfg.Vhosts[idx]
+		v.Enabled = !v.Enabled
+		if err := SaveConfig(app.baseDir, app.cfg); err != nil {
+			v.Enabled = !v.Enabled
+			app.appendLog("vhost enable: " + err.Error())
+			return
+		}
+		state := "disabled"
+		if v.Enabled {
+			state = "enabled"
+		}
+		app.appendLog(fmt.Sprintf("vhost: %s %s", v.Domain, state))
+		refreshVhostList()
+	})
 	addBtn("Apply to System", 140, SchemePrimary, func() {
 		if err := ApplyVhosts(app.baseDir, app.cfg); err != nil {
 			app.appendLog("apply vhosts: " + err.Error())
-			app.appendLog("  → if 'access denied', relaunch GoAMPP as administrator")
 			return
 		}
 		app.appendLog("vhosts applied — hosts file + Apache/Nginx configs updated")
@@ -1318,11 +1341,6 @@ func buildSettingsPage(parent *ui.Control) {
 		autoStartState = "on — launches into tray on login"
 	}
 	row("Auto-start on boot", autoStartState)
-	elev := "no — vhost Apply needs admin"
-	if IsElevated() {
-		elev = "yes (administrator)"
-	}
-	row("Running elevated", elev)
 
 	y += 12
 	section("ACTIONS")
@@ -1368,17 +1386,6 @@ func buildSettingsPage(parent *ui.Control) {
 	addBtn("Toggle Auto-start", SchemePrimary, func() {
 		toggleAutoStart()
 	})
-	if !IsElevated() {
-		addBtn("Restart as Admin", SchemeWarning, func() {
-			if err := RelaunchElevated(); err != nil {
-				app.appendLog("elevate: " + err.Error())
-				return
-			}
-			app.appendLog("relaunching as administrator — this instance will exit")
-			time.Sleep(200 * time.Millisecond)
-			quitApp(app.wnd)
-		})
-	}
 	addBtn("Add tools to PATH", SchemeSuccess, func() {
 		n, err := AddGoamppToUserPath()
 		if err != nil {
@@ -1712,6 +1719,7 @@ func buildLogPanel(wnd *ui.Main) {
 		Position(ui.Dpi(logX, logY)).
 		Width(ui.DpiX(logW)).Height(ui.DpiY(logH)).
 		CtrlStyle(co.ES_MULTILINE|co.ES_READONLY|co.ES_AUTOVSCROLL|co.ES_WANTRETURN).
+		WndStyle(co.WS_CHILD|co.WS_VISIBLE|co.WS_TABSTOP|co.WS_VSCROLL|co.WS_BORDER).
 		Layout(ui.LAY_HOLD_RESIZE))
 }
 
