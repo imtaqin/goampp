@@ -71,6 +71,9 @@ func main() {
 	}
 
 	app = &App{baseDir: baseDir, cfg: cfg}
+	if err := migrateLegacyComposer(baseDir, app.appendLog); err != nil {
+		app.appendLog("composer migration: " + err.Error())
+	}
 
 	for i := range cfg.Services {
 		sc := &cfg.Services[i]

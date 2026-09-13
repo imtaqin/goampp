@@ -25,6 +25,7 @@ func goamppPathDirs() []string {
 
 		join("bin", "apache", "bin"),
 		join("bin", "nginx"),
+		join("bin", "composer"),
 		join("bin", "php"),
 		join("bin", "mysql", "bin"),
 		join("bin", "pgsql", "bin"),
