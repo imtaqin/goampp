@@ -34,10 +34,10 @@ type ServiceUpdateInfo struct {
 }
 
 var (
-	packageMetaMu   sync.Mutex
-	updateRefreshMu sync.Mutex
-	updateStateMu   sync.RWMutex
-	serviceUpdates  = map[string]ServiceUpdateInfo{}
+	packageMetaMu     sync.Mutex
+	updateOperationMu sync.Mutex
+	updateStateMu     sync.RWMutex
+	serviceUpdates    = map[string]ServiceUpdateInfo{}
 )
 
 var packageSlugRe = regexp.MustCompile(`[^a-z0-9]+`)
@@ -185,11 +185,11 @@ func cachedServiceUpdate(name string) (ServiceUpdateInfo, bool) {
 }
 
 func refreshAllServiceUpdates() {
-	if !updateRefreshMu.TryLock() {
-		app.appendLog("updates: refresh already in progress")
+	if !updateOperationMu.TryLock() {
+		app.appendLog("updates: another package operation is already in progress")
 		return
 	}
-	defer updateRefreshMu.Unlock()
+	defer updateOperationMu.Unlock()
 
 	app.appendLog("updates: resolving latest package versions...")
 	if app.statusBar != nil {
