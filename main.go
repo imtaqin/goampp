@@ -43,6 +43,9 @@ var app *App
 const maxLogBytes = 200 * 1024
 
 func main() {
+	if handleElevatedHostsHelper() {
+		return
+	}
 
 	if len(os.Args) >= 3 && os.Args[1] == "--hide-run" {
 		cmd := exec.Command(os.Args[2], os.Args[3:]...)
@@ -56,10 +59,11 @@ func main() {
 
 	runtime.LockOSThread()
 
-	baseDir, err := os.Getwd()
+	exePath, err := os.Executable()
 	if err != nil {
-		die("getwd: " + err.Error())
+		die("executable path: " + err.Error())
 	}
+	baseDir := filepath.Dir(exePath)
 
 	cfg, err := LoadConfig(baseDir)
 	if err != nil {
