@@ -43,6 +43,9 @@ var app *App
 const maxLogBytes = 200 * 1024
 
 func main() {
+	if handleElevatedHostsHelper() {
+		return
+	}
 
 	if len(os.Args) >= 3 && os.Args[1] == "--hide-run" {
 		cmd := exec.Command(os.Args[2], os.Args[3:]...)
@@ -56,10 +59,11 @@ func main() {
 
 	runtime.LockOSThread()
 
-	baseDir, err := os.Getwd()
+	exePath, err := os.Executable()
 	if err != nil {
-		die("getwd: " + err.Error())
+		die("executable path: " + err.Error())
 	}
+	baseDir := filepath.Dir(exePath)
 
 	cfg, err := LoadConfig(baseDir)
 	if err != nil {
@@ -97,13 +101,12 @@ func main() {
 		ui.OptsMain().
 			Title("GoAMPP — Local Web Stack Control Panel").
 			Size(ui.Dpi(winW, winH)).
-			Style(co.WS_CAPTION | co.WS_SYSMENU | co.WS_CLIPCHILDREN |
-				co.WS_BORDER | co.WS_VISIBLE | co.WS_MINIMIZEBOX |
-				co.WS_MAXIMIZEBOX | co.WS_SIZEBOX).
+			Style(mainWindowStyle()).
 			ClassBrush(windowBgBrush()).
 			CmdShow(initialCmdShow),
 	)
 	app.wnd = wnd
+	configureMainWindowSizing(wnd)
 
 	wnd.On().WmDrawItem(handleDrawItem)
 
@@ -146,7 +149,7 @@ func main() {
 		ui.OptsStatusBar().
 			FixedPart(ui.DpiX(220), "Ready").
 			FlexPart(1, truncateMid(baseDir, 70)).
-			FixedPart(ui.DpiX(90), "GoAMPP v0.6.3"),
+			FixedPart(ui.DpiX(125), "GoAMPP v0.6.3"),
 	)
 
 	wnd.On().WmCreate(func(p ui.WmCreate) int {
@@ -184,10 +187,13 @@ func main() {
 		}
 
 		for _, name := range cfg.Settings.AutoStart {
-			if ms := app.findService(name); ms != nil && ms.Service != nil {
-				if err := ms.Service.Start(); err != nil {
-					app.appendLog(fmt.Sprintf("[auto-start] %s: %v", name, err))
-				}
+			ms := app.findService(name)
+			if !startupServiceEligible(ms) {
+				app.appendLog(fmt.Sprintf("[auto-start] skipping unavailable service %s", name))
+				continue
+			}
+			if err := ms.Service.Start(); err != nil {
+				app.appendLog(fmt.Sprintf("[auto-start] %s: %v", name, err))
 			}
 		}
 		return 0
@@ -211,13 +217,13 @@ func (a *App) findService(name string) *ManagedService {
 }
 
 func (a *App) appendLog(line string) {
-	a.logMu.Lock()
 	ts := time.Now().Format("15:04:05")
-	a.logBuf.WriteString(ts)
-	a.logBuf.WriteString(" ")
-	a.logBuf.WriteString(line)
-	a.logBuf.WriteString("\r\n")
+	entry := ts + " " + line + "\r\n"
 
+	a.logMu.Lock()
+	a.logBuf.WriteString(entry)
+
+	trimmed := false
 	if a.logBuf.Len() > maxLogBytes {
 		full := a.logBuf.String()
 		cut := len(full) / 4
@@ -227,6 +233,7 @@ func (a *App) appendLog(line string) {
 		}
 		a.logBuf.Reset()
 		a.logBuf.WriteString(full[cut:])
+		trimmed = true
 	}
 	text := a.logBuf.String()
 	a.logMu.Unlock()
@@ -235,12 +242,11 @@ func (a *App) appendLog(line string) {
 		return
 	}
 	a.wnd.UiThread(func() {
-		a.logBox.SetText(text)
-
-		const eot = uintptr(0x7FFFFFFF)
-		h := a.logBox.Hwnd()
-		h.SendMessage(co.EM_SETSEL, win.WPARAM(eot), win.LPARAM(eot))
-		h.SendMessage(co.EM_SCROLLCARET, 0, 0)
+		if trimmed {
+			resetLogBoxText(a, text)
+			return
+		}
+		appendLogBoxText(a, entry)
 	})
 }
 
