@@ -21,10 +21,10 @@ type persistedDownloadResolution struct {
 }
 
 type persistedLatestCatalog struct {
-	Schema   int                                                `json:"schema"`
-	SavedAt  time.Time                                          `json:"saved_at"`
-	Services map[string]persistedDownloadResolution              `json:"services,omitempty"`
-	Variants map[string]map[string]persistedDownloadResolution   `json:"variants,omitempty"`
+	Schema   int                                               `json:"schema"`
+	SavedAt  time.Time                                         `json:"saved_at"`
+	Services map[string]persistedDownloadResolution            `json:"services,omitempty"`
+	Variants map[string]map[string]persistedDownloadResolution `json:"variants,omitempty"`
 }
 
 var (

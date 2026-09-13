@@ -10,7 +10,7 @@ import (
 )
 
 var (
-	updatesRefreshBtn     *ui.Button
+	updatesRefreshBtn    *ui.Button
 	serviceVersionLabels = map[int]*ui.Static{}
 )
 
