@@ -398,6 +398,10 @@ func knownToolPath(name string) string {
 	case "php":
 		return join("bin", "php", "php.exe")
 	case "composer":
+		preferred := join("bin", "composer", "composer.phar")
+		if _, err := os.Stat(preferred); err == nil {
+			return preferred
+		}
 		return join("bin", "php", "composer.phar")
 	case "node":
 		return join("bin", "node", "node.exe")
@@ -430,20 +434,21 @@ func resolveTool(name string) string {
 	return name
 }
 
-const composerURL = "https://getcomposer.org/composer.phar"
-
 func ensureComposer(log func(string)) (string, error) {
-	target := filepath.Join(app.baseDir, "bin", "php", "composer.phar")
+	if err := migrateLegacyComposer(app.baseDir, log); err != nil {
+		return "", err
+	}
+	target := composerPharPath(app.baseDir)
 	if _, err := os.Stat(target); err == nil {
 		return target, nil
 	}
-	log("composer.phar not found — downloading from getcomposer.org")
-	if err := os.MkdirAll(filepath.Dir(target), 0o755); err != nil {
-		return "", err
-	}
 
-	if err := httpDownload(composerURL, target, log, nil); err != nil {
-		return "", fmt.Errorf("download composer: %w", err)
+	log("Composer not found — installing latest stable release")
+	if err := DownloadAndInstall("Composer", app.baseDir, log, NopProgress); err != nil {
+		return "", fmt.Errorf("install Composer: %w", err)
+	}
+	if _, err := os.Stat(target); err != nil {
+		return "", fmt.Errorf("Composer install completed but %s is missing", target)
 	}
 	return target, nil
 }
