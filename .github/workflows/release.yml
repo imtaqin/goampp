@@ -1,0 +1,181 @@
+name: Release
+
+# Every push to main is auto-tagged from its conventional commits since the
+# last tag (feat -> minor, fix/other -> patch, "!"/BREAKING CHANGE -> major,
+# minor while still 0.x) and released. ci/docs/chore/test/style-only pushes,
+# or a head commit containing [skip release], do not cut a release.
+#
+# Pushing a tag by hand (v0.6.4) still builds and publishes that tag.
+# workflow_dispatch runs the same steps but only uploads a workflow artifact,
+# so the packaging can be checked without cutting a release.
+on:
+  push:
+    branches: [main]
+    tags: ["v*"]
+  workflow_dispatch:
+
+permissions:
+  contents: write
+
+# Two quick pushes to main must not compute the same next tag.
+concurrency:
+  group: release-${{ github.ref }}
+  cancel-in-progress: false
+
+jobs:
+  tag:
+    if: github.event_name == 'push' && github.ref_type == 'branch'
+    runs-on: ubuntu-latest
+    outputs:
+      version: ${{ steps.next.outputs.version }}
+    steps:
+      - uses: actions/checkout@v7
+        with:
+          fetch-depth: 0
+
+      - name: Compute next version
+        id: next
+        shell: bash
+        run: |
+          set -euo pipefail
+
+          if git tag --points-at HEAD | grep -q '^v'; then
+            echo "HEAD already tagged, nothing to do"
+            exit 0
+          fi
+          if git log -1 --format=%B | grep -qF '[skip release]'; then
+            echo "[skip release] in head commit"
+            exit 0
+          fi
+
+          last=$(git describe --tags --abbrev=0 --match 'v[0-9]*.[0-9]*.[0-9]*' 2>/dev/null || true)
+          if [ -n "$last" ]; then range="$last..HEAD"; else last=v0.0.0; range=HEAD; fi
+
+          bump=0 # 0 none, 1 patch, 2 minor, 3 major
+          while IFS= read -r subject; do
+            [ -z "$subject" ] && continue
+            if [[ "$subject" =~ ^[a-zA-Z]+(\([^\)]*\))?!: ]]; then
+              b=3
+            elif [[ "$subject" =~ ^feat(\([^\)]*\))?: ]]; then
+              b=2
+            elif [[ "$subject" =~ ^(ci|docs|chore|test|style)(\([^\)]*\))?: ]]; then
+              b=0
+            else
+              b=1
+            fi
+            [ "$b" -gt "$bump" ] && bump=$b
+          done < <(git log --no-merges --format=%s "$range")
+
+          if git log --no-merges --format=%B "$range" | grep -q '^BREAKING[ -]CHANGE'; then
+            bump=3
+          fi
+
+          if [ "$bump" -eq 0 ]; then
+            echo "No releasable commits since $last"
+            exit 0
+          fi
+
+          IFS=. read -r major minor patch <<< "${last#v}"
+          case $bump in
+            3) if [ "$major" -eq 0 ]; then minor=$((minor+1)); patch=0
+               else major=$((major+1)); minor=0; patch=0; fi ;;
+            2) minor=$((minor+1)); patch=0 ;;
+            1) patch=$((patch+1)) ;;
+          esac
+          version="v$major.$minor.$patch"
+          echo "$last -> $version"
+          echo "version=$version" >> "$GITHUB_OUTPUT"
+
+      # A tag pushed with GITHUB_TOKEN does not start another workflow run,
+      # so the release job below builds it in this same run.
+      - name: Push tag
+        if: steps.next.outputs.version != ''
+        shell: bash
+        env:
+          VERSION: ${{ steps.next.outputs.version }}
+        run: |
+          git config user.name "github-actions[bot]"
+          git config user.email "41898282+github-actions[bot]@users.noreply.github.com"
+          git tag -a "$VERSION" -m "$VERSION"
+          git push origin "$VERSION"
+
+  release:
+    needs: tag
+    # tag is skipped for tag pushes and manual runs; on main only continue
+    # when it actually produced a version.
+    if: >-
+      !cancelled() && needs.tag.result != 'failure' &&
+      (github.ref_type != 'branch' || github.event_name == 'workflow_dispatch' || needs.tag.outputs.version != '')
+    runs-on: windows-latest
+    env:
+      # Auto tag, pushed tag name, or "dev" for a manual dry run.
+      VERSION: ${{ needs.tag.outputs.version || (github.ref_type == 'tag' && github.ref_name) || 'dev' }}
+
+    steps:
+      - uses: actions/checkout@v7
+
+      - uses: actions/setup-go@v7
+        with:
+          go-version-file: go.mod
+          cache: true
+
+      # Don't publish a broken build.
+      - name: Vet
+        run: go vet ./...
+
+      - name: Test
+        run: go test ./... -count=1
+
+      - name: Build
+        shell: pwsh
+        # Mirrors build.bat: windowsgui so no console window appears, -s -w to
+        # strip symbols. appVersion is stamped from the tag so the About box
+        # cannot drift from the release it was built from.
+        run: |
+          go build -ldflags="-H windowsgui -s -w -X main.appVersion=$env:VERSION" -trimpath -o goampp.exe .
+
+      # README: run goampp.exe next to goampp.exe.manifest, logo.ico and
+      # assets/icons/*.ico. tray.go needs logo.ico beside the exe, and the
+      # welcome page reads assets/icons plus logo.png.
+      - name: Package portable bundle
+        shell: pwsh
+        run: |
+          $stage = "dist/goampp"
+          New-Item -ItemType Directory -Force $stage/assets | Out-Null
+          Copy-Item goampp.exe, goampp.exe.manifest, logo.ico, logo.png $stage/
+          Copy-Item assets/icons $stage/assets/ -Recurse
+
+          # Ship a README so the zip explains itself.
+          @"
+          GoAMPP $env:VERSION - portable build
+
+          Extract anywhere and run goampp.exe. Keep the whole folder together:
+          the manifest, logo.ico and assets/ are read at runtime.
+
+          Binaries and runtimes (Apache, PHP, MySQL, ...) are downloaded on
+          first install from within the app.
+          "@ | Set-Content -Path "$stage/README.txt"
+
+          Compress-Archive -Path $stage -DestinationPath "goampp-$env:VERSION-windows-amd64.zip"
+          Get-Item "goampp-$env:VERSION-windows-amd64.zip" | Select-Object Name,Length
+
+      - name: Upload build artifact
+        if: env.VERSION == 'dev'
+        uses: actions/upload-artifact@v7
+        with:
+          name: goampp-${{ env.VERSION }}-windows-amd64
+          path: goampp-*-windows-amd64.zip
+          if-no-files-found: error
+
+      # gh ships on the runner, so no third-party release action is needed.
+      - name: Publish release
+        if: env.VERSION != 'dev'
+        shell: pwsh
+        env:
+          GH_TOKEN: ${{ github.token }}
+        run: |
+          gh release view $env:VERSION *> $null
+          if ($LASTEXITCODE -ne 0) {
+            gh release create $env:VERSION --title "GoAMPP $env:VERSION" --generate-notes
+          }
+          gh release upload $env:VERSION "goampp-$env:VERSION-windows-amd64.zip" --clobber

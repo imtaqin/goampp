@@ -42,6 +42,13 @@ var app *App
 
 const maxLogBytes = 200 * 1024
 
+// appVersion is the release this build came from. The release workflow stamps
+// it from the tag (-ldflags "-X main.appVersion=v0.6.4"), so the About box and
+// the status bar cannot drift from the release they were built from — which is
+// what the two hand-written copies of this string used to do. "dev" is the
+// honest label for a local build.
+var appVersion = "dev"
+
 func main() {
 	if handleElevatedHostsHelper() {
 		return
@@ -74,6 +81,12 @@ func main() {
 	if err := migrateLegacyComposer(baseDir, app.appendLog); err != nil {
 		app.appendLog("composer migration: " + err.Error())
 	}
+
+	// Before anything can reach for a cached download: drop files an earlier
+	// run left poisoned, so an install that already hit the Apache Lounge
+	// bug heals on this launch instead of failing at extract again (issue #1).
+	setDownloadCache(baseDir, app.appendLog)
+	sweepDownloadCache(baseDir, app.appendLog)
 
 	for i := range cfg.Services {
 		sc := &cfg.Services[i]
@@ -152,7 +165,7 @@ func main() {
 		ui.OptsStatusBar().
 			FixedPart(ui.DpiX(220), "Ready").
 			FlexPart(1, truncateMid(baseDir, 70)).
-			FixedPart(ui.DpiX(125), "GoAMPP v0.6.3"),
+			FixedPart(ui.DpiX(125), "GoAMPP "+appVersion),
 	)
 
 	wnd.On().WmCreate(func(p ui.WmCreate) int {

@@ -7,7 +7,6 @@ import (
 	"fmt"
 	"io"
 	"net/http"
-	"net/url"
 	"regexp"
 	"strings"
 	"time"
@@ -34,29 +33,6 @@ func fetchReleaseText(rawURL string) (string, error) {
 		return "", err
 	}
 	return string(body), nil
-}
-
-func resolveApacheLatest(log func(string)) (urlOut, fileName, stripTop, version string, err error) {
-	const pageURL = "https://www.apachelounge.com/download/"
-	log("  resolving latest Apache Lounge VS18 Win64 build ...")
-	body, err := fetchReleaseText(pageURL)
-	if err != nil {
-		return "", "", "", "", err
-	}
-
-	re := regexp.MustCompile(`(?i)href=["']([^"']*?(httpd-([0-9]+\.[0-9]+\.[0-9]+-[0-9]+)-Win64-VS18\.zip))["']`)
-	m := re.FindStringSubmatch(body)
-	if len(m) < 4 {
-		return "", "", "", "", fmt.Errorf("Apache Lounge Win64 VS18 package not found")
-	}
-	base, _ := url.Parse(pageURL)
-	href, err := url.Parse(m[1])
-	if err != nil {
-		return "", "", "", "", err
-	}
-	resolvedURL := base.ResolveReference(href).String()
-	log("  latest Apache Lounge build: " + m[3])
-	return resolvedURL, m[2], "Apache24/", m[3], nil
 }
 
 func resolveNginxStable(log func(string)) (urlOut, fileName, stripTop, version string, err error) {

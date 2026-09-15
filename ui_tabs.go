@@ -1434,7 +1434,7 @@ func buildSettingsPage(parent *ui.Control) {
 	section("ABOUT")
 	row("Project", "GoAMPP — Native Windows local dev stack")
 	row("Author", "imtaqin (fdciabdul)")
-	row("Version", "v0.6.3")
+	row("Version", appVersion)
 	row("GitHub", "https://github.com/imtaqin/goampp")
 	row("Website", "https://imtaqin.id")
 

@@ -1,0 +1,28 @@
+name: CI
+
+on:
+  push:
+    branches: [main]
+  pull_request:
+
+permissions:
+  contents: read
+
+jobs:
+  test:
+    runs-on: windows-latest
+    steps:
+      - uses: actions/checkout@v7
+
+      - uses: actions/setup-go@v7
+        with:
+          # Reads the `go` directive from go.mod, so the toolchain is never
+          # pinned in two places.
+          go-version-file: go.mod
+          cache: true
+
+      - name: Vet
+        run: go vet ./...
+
+      - name: Test
+        run: go test ./... -count=1

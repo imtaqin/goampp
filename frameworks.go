@@ -584,19 +584,10 @@ func scaffoldComposer(f *Framework, projectDir string, log func(string)) (*Scaff
 
 func scaffoldDownload(f *Framework, projectDir string, log func(string)) (*ScaffoldResult, error) {
 
-	dlDir := filepath.Join(app.baseDir, "downloads")
-	if err := os.MkdirAll(dlDir, 0o755); err != nil {
-		return nil, err
-	}
-	dlPath := filepath.Join(dlDir, safeFileName(f.Name)+".zip")
-
-	if _, err := os.Stat(dlPath); err != nil {
-		log(fmt.Sprintf("downloading %s from %s", f.Name, f.DownloadURL))
-		if err := httpDownload(f.DownloadURL, dlPath, log, nil); err != nil {
-			return nil, fmt.Errorf("download: %w", err)
-		}
-	} else {
-		log("using cached " + filepath.Base(dlPath))
+	// Fetch logs the cache hit, and httpDownload logs the GET on a miss.
+	dlPath, err := cacheFor(app.baseDir, log).Fetch(safeFileName(f.Name)+".zip", f.DownloadURL, nil)
+	if err != nil {
+		return nil, fmt.Errorf("download: %w", err)
 	}
 
 	log(fmt.Sprintf("extracting into %s", projectDir))
