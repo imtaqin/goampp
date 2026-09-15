@@ -573,9 +573,9 @@ var DownloadCatalog = map[string]DownloadSpec{
 		},
 	},
 	"Go": {
-		Version:    "1.26.2",
-		URL:        "https://go.dev/dl/go1.26.2.windows-amd64.zip",
-		FileName:   "go1.26.2.windows-amd64.zip",
+		Version:    "1.27.1",
+		URL:        "https://go.dev/dl/go1.27.1.windows-amd64.zip",
+		FileName:   "go1.27.1.windows-amd64.zip",
 		InstallDir: "bin/go",
 		StripTop:   "go/",
 		Kind:       Zip,
