@@ -42,6 +42,13 @@ var app *App
 
 const maxLogBytes = 200 * 1024
 
+// appVersion is the release this build came from. The release workflow stamps
+// it from the tag (-ldflags "-X main.appVersion=v0.6.4"), so the About box and
+// the status bar cannot drift from the release they were built from — which is
+// what the two hand-written copies of this string used to do. "dev" is the
+// honest label for a local build.
+var appVersion = "dev"
+
 func main() {
 
 	if len(os.Args) >= 3 && os.Args[1] == "--hide-run" {
@@ -151,7 +158,7 @@ func main() {
 		ui.OptsStatusBar().
 			FixedPart(ui.DpiX(220), "Ready").
 			FlexPart(1, truncateMid(baseDir, 70)).
-			FixedPart(ui.DpiX(90), "GoAMPP v0.6.3"),
+			FixedPart(ui.DpiX(90), "GoAMPP "+appVersion),
 	)
 
 	wnd.On().WmCreate(func(p ui.WmCreate) int {

@@ -1,0 +1,89 @@
+name: Release
+
+# Tag a commit (v0.6.4) and push the tag — this builds and publishes the
+# portable Windows bundle. workflow_dispatch runs the same steps but only
+# uploads a workflow artifact, so the packaging can be checked without cutting
+# a release.
+on:
+  push:
+    tags: ["v*"]
+  workflow_dispatch:
+
+permissions:
+  contents: write
+
+jobs:
+  release:
+    runs-on: windows-latest
+    env:
+      # Tag name when releasing; "dev" for a manual dry run.
+      VERSION: ${{ github.ref_type == 'tag' && github.ref_name || 'dev' }}
+
+    steps:
+      - uses: actions/checkout@v4
+
+      - uses: actions/setup-go@v5
+        with:
+          go-version-file: go.mod
+          cache: true
+
+      # Don't publish a broken build.
+      - name: Vet
+        run: go vet ./...
+
+      - name: Test
+        run: go test ./... -count=1
+
+      - name: Build
+        shell: pwsh
+        # Mirrors build.bat: windowsgui so no console window appears, -s -w to
+        # strip symbols. appVersion is stamped from the tag so the About box
+        # cannot drift from the release it was built from.
+        run: |
+          go build -ldflags="-H windowsgui -s -w -X main.appVersion=$env:VERSION" -trimpath -o goampp.exe .
+
+      # README: run goampp.exe next to goampp.exe.manifest, logo.ico and
+      # assets/icons/*.ico. tray.go needs logo.ico beside the exe, and the
+      # welcome page reads assets/icons plus logo.png.
+      - name: Package portable bundle
+        shell: pwsh
+        run: |
+          $stage = "dist/goampp"
+          New-Item -ItemType Directory -Force $stage/assets | Out-Null
+          Copy-Item goampp.exe, goampp.exe.manifest, logo.ico, logo.png $stage/
+          Copy-Item assets/icons $stage/assets/ -Recurse
+
+          # Ship a README so the zip explains itself.
+          @"
+          GoAMPP $env:VERSION - portable build
+
+          Extract anywhere and run goampp.exe. Keep the whole folder together:
+          the manifest, logo.ico and assets/ are read at runtime.
+
+          Binaries and runtimes (Apache, PHP, MySQL, ...) are downloaded on
+          first install from within the app.
+          "@ | Set-Content -Path "$stage/README.txt"
+
+          Compress-Archive -Path $stage -DestinationPath "goampp-$env:VERSION-windows-amd64.zip"
+          Get-Item "goampp-$env:VERSION-windows-amd64.zip" | Select-Object Name,Length
+
+      - name: Upload build artifact
+        if: github.ref_type != 'tag'
+        uses: actions/upload-artifact@v4
+        with:
+          name: goampp-${{ env.VERSION }}-windows-amd64
+          path: goampp-*-windows-amd64.zip
+          if-no-files-found: error
+
+      # gh ships on the runner, so no third-party release action is needed.
+      - name: Publish release
+        if: github.ref_type == 'tag'
+        shell: pwsh
+        env:
+          GH_TOKEN: ${{ github.token }}
+        run: |
+          gh release view $env:VERSION *> $null
+          if ($LASTEXITCODE -ne 0) {
+            gh release create $env:VERSION --title "GoAMPP $env:VERSION" --generate-notes
+          }
+          gh release upload $env:VERSION "goampp-$env:VERSION-windows-amd64.zip" --clobber

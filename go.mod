@@ -1,6 +1,6 @@
 module goampp
 
-go 1.26.2
+go 1.27
 
 require (
 	github.com/rodrigocfd/windigo v0.2.5
