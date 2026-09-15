@@ -68,6 +68,12 @@ func main() {
 
 	app = &App{baseDir: baseDir, cfg: cfg}
 
+	// Before anything can reach for a cached download: drop files an earlier
+	// run left poisoned, so an install that already hit the Apache Lounge
+	// bug heals on this launch instead of failing at extract again (issue #1).
+	setDownloadCache(baseDir, app.appendLog)
+	sweepDownloadCache(baseDir, app.appendLog)
+
 	for i := range cfg.Services {
 		sc := &cfg.Services[i]
 		ms := &ManagedService{Conf: sc}
