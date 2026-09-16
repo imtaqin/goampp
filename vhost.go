@@ -64,22 +64,7 @@ func writeHostsBlock(path string, vhosts []Vhost) error {
 	if err != nil && !os.IsNotExist(err) {
 		return err
 	}
-	cleaned := stripManagedBlock(existing, hostsMarkerBegin, hostsMarkerEnd)
-
-	var buf bytes.Buffer
-	buf.Write(cleaned)
-	if len(cleaned) > 0 && !bytes.HasSuffix(cleaned, []byte("\n")) {
-		buf.WriteString("\r\n")
-	}
-	buf.WriteString(hostsMarkerBegin + "\r\n")
-	for _, v := range vhosts {
-
-		fmt.Fprintf(&buf, "127.0.0.1 %s\r\n", v.Domain)
-		fmt.Fprintf(&buf, "::1       %s\r\n", v.Domain)
-	}
-	buf.WriteString(hostsMarkerEnd + "\r\n")
-
-	return atomicWrite(path, buf.Bytes())
+	return applyHostsFile(path, buildHostsContent(existing, vhosts))
 }
 
 func writeApacheVhosts(path, baseDir string, vhosts []Vhost) error {
@@ -119,7 +104,6 @@ func writeApacheVhosts(path, baseDir string, vhosts []Vhost) error {
 		fmt.Fprintf(&buf, "    ServerName %s\r\n", v.Domain)
 
 		if v.ProxyPort > 0 {
-
 			fmt.Fprintf(&buf, "    ProxyPreserveHost On\r\n")
 			fmt.Fprintf(&buf, "    ProxyRequests Off\r\n")
 			fmt.Fprintf(&buf, "    ProxyPass / http://127.0.0.1:%d/\r\n", v.ProxyPort)
