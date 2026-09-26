@@ -144,6 +144,8 @@ jobs:
           New-Item -ItemType Directory -Force $stage/assets | Out-Null
           Copy-Item goampp.exe, goampp.exe.manifest, logo.ico, logo.png $stage/
           Copy-Item assets/icons $stage/assets/ -Recurse
+          # PostgreSQL's post-install hook seeds these into pgsql/bin.
+          Copy-Item runtime $stage/ -Recurse
 
           # Ship a README so the zip explains itself.
           @"
@@ -159,12 +161,33 @@ jobs:
           Compress-Archive -Path $stage -DestinationPath "goampp-$env:VERSION-windows-amd64.zip"
           Get-Item "goampp-$env:VERSION-windows-amd64.zip" | Select-Object Name,Length
 
+      # installer/goampp.iss -> dist/goampp-setup-X.Y.Z.exe (no "v", as the
+      # README documents). Inno Setup is not on every runner image, so it is
+      # installed on demand.
+      - name: Build installer
+        shell: pwsh
+        run: |
+          $iscc = (Get-Command iscc -ErrorAction SilentlyContinue).Source
+          if (-not $iscc) {
+            $iscc = "${env:ProgramFiles(x86)}\Inno Setup 6\ISCC.exe"
+            if (-not (Test-Path $iscc)) {
+              choco install innosetup -y --no-progress
+              if ($LASTEXITCODE -ne 0) { exit $LASTEXITCODE }
+            }
+          }
+          $ver = if ($env:VERSION -eq 'dev') { '0.0.0' } else { $env:VERSION.TrimStart('v') }
+          & $iscc /Q "/DAppVersion=$ver" installer/goampp.iss
+          if ($LASTEXITCODE -ne 0) { exit $LASTEXITCODE }
+          Get-Item dist/goampp-setup-*.exe | Select-Object Name,Length
+
       - name: Upload build artifact
         if: env.VERSION == 'dev'
         uses: actions/upload-artifact@v7
         with:
           name: goampp-${{ env.VERSION }}-windows-amd64
-          path: goampp-*-windows-amd64.zip
+          path: |
+            goampp-*-windows-amd64.zip
+            dist/goampp-setup-*.exe
           if-no-files-found: error
 
       # gh ships on the runner, so no third-party release action is needed.
@@ -178,4 +201,4 @@ jobs:
           if ($LASTEXITCODE -ne 0) {
             gh release create $env:VERSION --title "GoAMPP $env:VERSION" --generate-notes
           }
-          gh release upload $env:VERSION "goampp-$env:VERSION-windows-amd64.zip" --clobber
+          gh release upload $env:VERSION "goampp-$env:VERSION-windows-amd64.zip" (Get-Item dist/goampp-setup-*.exe).FullName --clobber
