@@ -8,11 +8,6 @@ goampp.exe~
 # Inno Setup output (built installer + temp logs)
 dist/
 
-# Installer scripts are local-only — the .exe ships via GitHub Releases,
-# not via the source tree.
-installer/
-build-installer.bat
-
 # Personal marketing drafts (dev.to / LinkedIn / blog posts) — kept
 # next to the code while I edit them, not part of the project.
 articles/
