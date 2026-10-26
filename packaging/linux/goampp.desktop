@@ -1,0 +1,10 @@
+[Desktop Entry]
+Type=Application
+Name=GoAMPP
+GenericName=Local Development Environment
+Comment=Manage local web services and development projects
+Exec=goampp
+Icon=goampp
+Terminal=false
+Categories=Development;WebDevelopment;IDE;
+StartupNotify=true

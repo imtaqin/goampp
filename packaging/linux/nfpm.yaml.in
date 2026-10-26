@@ -1,0 +1,46 @@
+name: goampp
+arch: amd64
+platform: linux
+version: "@VERSION@"
+section: devel
+priority: optional
+maintainer: GoAMPP contributors
+description: Native desktop panel for local web services and development projects
+vendor: Flessan
+homepage: https://github.com/flessan/goampp-linux
+license: MIT
+contents:
+  - src: dist/linux/goampp-linux
+    dst: /usr/bin/goampp
+    file_info:
+      mode: 0755
+  - src: packaging/linux/goampp.desktop
+    dst: /usr/share/applications/goampp.desktop
+    file_info:
+      mode: 0644
+  - src: dist/linux/goampp-icon-512.png
+    dst: /usr/share/icons/hicolor/512x512/apps/goampp.png
+    file_info:
+      mode: 0644
+depends:
+  - libgl1
+  - libx11-6
+  - libxcursor1
+  - libxrandr2
+  - libxinerama1
+  - libxi6
+  - libxxf86vm1
+  - libxkbcommon0
+  - libwayland-client0
+overrides:
+  rpm:
+    depends:
+      - mesa-libGL
+      - libX11
+      - libXcursor
+      - libXrandr
+      - libXinerama
+      - libXi
+      - libXxf86vm
+      - libxkbcommon
+      - wayland-libs-client

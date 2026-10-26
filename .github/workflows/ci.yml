@@ -19,12 +19,9 @@ jobs:
 
       - uses: actions/setup-go@v7
         with:
-          # Reads the `go` directive from go.mod, so the toolchain is never
-          # pinned in two places.
           go-version-file: go.mod
           cache: true
 
-      # Use the image's MinGW-w64 gcc, installing it when the image has none.
       - name: Set up gcc
         shell: pwsh
         run: |
@@ -39,3 +36,121 @@ jobs:
 
       - name: Test
         run: go test ./... -count=1
+
+  test-linux:
+    runs-on: ubuntu-latest
+    env:
+      CGO_ENABLED: "1"
+    steps:
+      - uses: actions/checkout@v7
+
+      - uses: actions/setup-go@v7
+        with:
+          go-version-file: go.mod
+          cache: true
+
+      - name: Install Fyne/GLFW system dependencies
+        run: |
+          sudo apt-get update
+          sudo apt-get install -y build-essential libgl1-mesa-dev xorg-dev libwayland-dev wayland-protocols libxkbcommon-dev libxkbcommon-x11-dev libdecor-0-dev php-cli nodejs npm python3
+
+      - name: Vet
+        run: go vet ./...
+
+      - name: Test
+        run: go test ./... -count=1
+
+      - name: Race-check Linux process lifecycle
+        run: go test -race ./internal/linuxapp -count=1
+
+      - name: Validate Linux packaging scripts
+        run: |
+          sh -n packaging/linux/install.sh
+          sh -n packaging/linux/uninstall.sh
+          bash -n packaging/linux/package.sh
+          grep -Fq 'Type=Application' packaging/linux/goampp.desktop
+          grep -Fq 'Exec=goampp' packaging/linux/goampp.desktop
+          grep -Fq 'version: "@VERSION@"' packaging/linux/nfpm.yaml.in
+
+      - name: Test per-user install and uninstall
+        shell: bash
+        run: |
+          set -euo pipefail
+          tmp="$(mktemp -d)"
+          trap 'rm -rf "$tmp"' EXIT
+          payload="$tmp/payload"
+          test_home="$tmp/home"
+          mkdir -p "$payload" "$test_home/GoAMPP/www"
+          cp packaging/linux/goampp.desktop packaging/linux/install.sh packaging/linux/uninstall.sh "$payload/"
+          printf '#!/bin/sh\nexit 0\n' > "$payload/goampp-linux"
+          printf 'test icon\n' > "$payload/logo.png"
+          chmod +x "$payload/goampp-linux"
+          printf 'preserve this project\n' > "$test_home/GoAMPP/www/keep.txt"
+
+          HOME="$test_home" sh "$payload/install.sh"
+          test -x "$test_home/.local/bin/goampp"
+          grep -Fq "Exec=\"$test_home/.local/bin/goampp\"" "$test_home/.local/share/applications/goampp.desktop"
+          test -f "$test_home/.local/share/icons/hicolor/512x512/apps/goampp.png"
+
+          HOME="$test_home" sh "$payload/uninstall.sh"
+          test ! -e "$test_home/.local/bin/goampp"
+          test ! -e "$test_home/.local/share/applications/goampp.desktop"
+          test ! -e "$test_home/.local/share/icons/hicolor/512x512/apps/goampp.png"
+          grep -Fxq 'preserve this project' "$test_home/GoAMPP/www/keep.txt"
+          echo 'Per-user install/uninstall test passed.'
+
+      - name: Build native Linux binary
+        run: |
+          mkdir -p dist/linux
+          go build -trimpath -o dist/linux/goampp-linux .
+
+      - name: Install Linux packaging tools
+        if: github.event_name == 'pull_request'
+        run: |
+          sudo apt-get install -y file desktop-file-utils patchelf imagemagick
+          go install github.com/goreleaser/nfpm/v2/cmd/nfpm@v2.41.3
+          echo "$(go env GOPATH)/bin" >> "$GITHUB_PATH"
+
+      - name: Package Linux distributions
+        if: github.event_name == 'pull_request'
+        env:
+          VERSION: dev
+        run: |
+          bash -n packaging/linux/package.sh
+          bash packaging/linux/package.sh
+
+      - name: Upload Linux AppImage preview
+        if: github.event_name == 'pull_request'
+        uses: actions/upload-artifact@v7
+        with:
+          name: goampp-preview-linux-appimage
+          path: dist/packages/goampp-dev-linux-amd64.AppImage
+          if-no-files-found: error
+          retention-days: 7
+
+      - name: Upload Linux Debian package preview
+        if: github.event_name == 'pull_request'
+        uses: actions/upload-artifact@v7
+        with:
+          name: goampp-preview-linux-deb
+          path: dist/packages/goampp-dev-linux-amd64.deb
+          if-no-files-found: error
+          retention-days: 7
+
+      - name: Upload Linux RPM package preview
+        if: github.event_name == 'pull_request'
+        uses: actions/upload-artifact@v7
+        with:
+          name: goampp-preview-linux-rpm
+          path: dist/packages/goampp-dev-linux-amd64.rpm
+          if-no-files-found: error
+          retention-days: 7
+
+      - name: Upload Linux portable archive preview
+        if: github.event_name == 'pull_request'
+        uses: actions/upload-artifact@v7
+        with:
+          name: goampp-preview-linux-tar-gz
+          path: dist/packages/goampp-dev-linux-amd64.tar.gz
+          if-no-files-found: error
+          retention-days: 7

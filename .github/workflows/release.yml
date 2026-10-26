@@ -218,3 +218,86 @@ jobs:
             gh release create $env:VERSION --title "GoAMPP $env:VERSION" --generate-notes
           }
           gh release upload $env:VERSION "goampp-$env:VERSION-windows-amd64.zip" (Get-Item dist/goampp-setup-*.exe).FullName --clobber
+
+  release-linux:
+    needs: [tag, release]
+    if: >-
+      !cancelled() && needs.tag.result != 'failure' &&
+      needs.release.result == 'success' &&
+      (github.ref_type != 'branch' || github.event_name == 'workflow_dispatch' || needs.tag.outputs.version != '')
+    runs-on: ubuntu-latest
+    env:
+      VERSION: ${{ needs.tag.outputs.version || (github.ref_type == 'tag' && github.ref_name) || 'dev' }}
+      CGO_ENABLED: "1"
+
+    steps:
+      - uses: actions/checkout@v7
+
+      - uses: actions/setup-go@v7
+        with:
+          go-version-file: go.mod
+          cache: true
+
+      - name: Install Fyne/GLFW system dependencies
+        run: |
+          sudo apt-get update
+          sudo apt-get install -y build-essential libgl1-mesa-dev xorg-dev libwayland-dev wayland-protocols libxkbcommon-dev libxkbcommon-x11-dev libdecor-0-dev file desktop-file-utils patchelf curl imagemagick
+
+      - name: Vet and test
+        run: |
+          go vet ./...
+          go test ./... -count=1
+
+      - name: Install nfpm
+        run: |
+          go install github.com/goreleaser/nfpm/v2/cmd/nfpm@v2.41.3
+          echo "$(go env GOPATH)/bin" >> "$GITHUB_PATH"
+
+      - name: Build Linux binary
+        run: |
+          mkdir -p dist/linux
+          go build -trimpath -ldflags="-s -w" -o dist/linux/goampp-linux .
+
+      - name: Build Linux distributions
+        run: |
+          bash -n packaging/linux/package.sh
+          bash packaging/linux/package.sh
+
+      - name: Upload Linux AppImage preview
+        if: env.VERSION == 'dev'
+        uses: actions/upload-artifact@v7
+        with:
+          name: goampp-dev-linux-appimage
+          path: dist/packages/goampp-dev-linux-amd64.AppImage
+          if-no-files-found: error
+
+      - name: Upload Linux Debian package preview
+        if: env.VERSION == 'dev'
+        uses: actions/upload-artifact@v7
+        with:
+          name: goampp-dev-linux-deb
+          path: dist/packages/goampp-dev-linux-amd64.deb
+          if-no-files-found: error
+
+      - name: Upload Linux RPM package preview
+        if: env.VERSION == 'dev'
+        uses: actions/upload-artifact@v7
+        with:
+          name: goampp-dev-linux-rpm
+          path: dist/packages/goampp-dev-linux-amd64.rpm
+          if-no-files-found: error
+
+      - name: Upload Linux portable archive preview
+        if: env.VERSION == 'dev'
+        uses: actions/upload-artifact@v7
+        with:
+          name: goampp-dev-linux-tar-gz
+          path: dist/packages/goampp-dev-linux-amd64.tar.gz
+          if-no-files-found: error
+
+      - name: Publish Linux release assets
+        if: env.VERSION != 'dev'
+        env:
+          GH_TOKEN: ${{ github.token }}
+        run: |
+          gh release upload "$VERSION" "dist/packages/goampp-$VERSION-linux-amd64.tar.gz" "dist/packages/goampp-$VERSION-linux-amd64.AppImage" "dist/packages/goampp-$VERSION-linux-amd64.deb" "dist/packages/goampp-$VERSION-linux-amd64.rpm" --clobber
